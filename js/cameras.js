@@ -1,6 +1,7 @@
 /* ========================================
    WorldView - Surveillance Cameras
-   OSM Overpass + Traffic Cameras
+   OSM Overpass (stream-URL only) + Windy Webcams API
+   MJPEG/HLS proxied through server/proxy.js
    ======================================== */
 
 const WorldViewCameras = (() => {
@@ -16,88 +17,121 @@ const WorldViewCameras = (() => {
 
     const OVERPASS_PROXY = '/api/overpass';
     const OVERPASS_DIRECT = 'https://overpass-api.de/api/interpreter';
+    const WINDY_PROXY = '/api/windy-webcams';
 
-    // Debounce: only fetch when camera stops moving for 2 seconds
     const DEBOUNCE_MS = 2000;
-    // Only fetch cameras when zoomed in enough
-    const MIN_ALTITUDE_FOR_CAMERAS = 500000; // 500km
+    const MIN_ALTITUDE_FOR_CAMERAS = 500000;
+
+    function getConfig() {
+        return (typeof window !== 'undefined' && window.WorldViewConfig) ? window.WorldViewConfig : {};
+    }
+
+    function isConfigured(key) {
+        const cfg = getConfig();
+        const val = cfg[key];
+        if (val === undefined || val === null || val === false) return false;
+        if (typeof val === 'string' && val.startsWith('YOUR_')) return false;
+        if (typeof val === 'string' && val.trim() === '') return false;
+        return true;
+    }
+
+    function createCameraIcon(fillColor) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 24;
+        canvas.height = 24;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(4, 6, 12, 10);
+        ctx.beginPath();
+        ctx.moveTo(16, 8);
+        ctx.lineTo(22, 5);
+        ctx.lineTo(22, 17);
+        ctx.lineTo(16, 14);
+        ctx.closePath();
+        ctx.fillStyle = fillColor === '#00ff88' ? '#00cc66' : '#00c0dd';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(7, 9, 2, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff3344';
+        ctx.fill();
+        return canvas.toDataURL();
+    }
+
+    let osmCameraIcon = null;
+    let windyCameraIcon = null;
 
     function init(cesiumViewer) {
         viewer = cesiumViewer;
         console.log('[Cameras] Initializing camera layer...');
-
+        osmCameraIcon = createCameraIcon('#00f0ff');
+        windyCameraIcon = createCameraIcon('#00ff88');
         setupClickHandler();
         setupViewportListener();
         setupFeedModalClose();
-
         console.log('[Cameras] Camera layer initialized (viewport-based loading).');
+        console.log(`[Cameras] Windy Webcams: ${isConfigured('windyWebcamApiKey') ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
     }
 
     function setupViewportListener() {
-        // Listen for camera movement end
         viewer.camera.moveEnd.addEventListener(() => {
             if (!visible) return;
-
-            // Clear any pending fetch
             if (fetchTimeout) clearTimeout(fetchTimeout);
-
-            // Debounce
-            fetchTimeout = setTimeout(() => {
-                checkAndFetchCameras();
-            }, DEBOUNCE_MS);
+            fetchTimeout = setTimeout(() => { checkAndFetchCameras(); }, DEBOUNCE_MS);
         });
     }
 
     function checkAndFetchCameras() {
         if (!visible || isFetching) return;
-
-        // Check altitude - only load cameras when zoomed in
         const pos = WorldViewGlobe.getCameraPosition();
-        if (!pos || pos.alt > MIN_ALTITUDE_FOR_CAMERAS) {
-            return;
-        }
-
+        if (!pos || pos.alt > MIN_ALTITUDE_FOR_CAMERAS) return;
         const bounds = WorldViewGlobe.getViewportBounds();
         if (!bounds) return;
-
-        // Check if bounds changed significantly
         if (lastBounds) {
             const latDiff = Math.abs(bounds.south - lastBounds.south) + Math.abs(bounds.north - lastBounds.north);
             const lonDiff = Math.abs(bounds.west - lastBounds.west) + Math.abs(bounds.east - lastBounds.east);
-            if (latDiff < 0.5 && lonDiff < 0.5) {
-                return; // Bounds haven't changed enough
-            }
+            if (latDiff < 0.5 && lonDiff < 0.5) return;
         }
-
-        // Limit bounding box size to avoid huge queries
         const latRange = bounds.north - bounds.south;
         const lonRange = bounds.east - bounds.west;
         if (latRange > 5 || lonRange > 5) {
             console.log('[Cameras] Viewport too large for camera query. Zoom in more.');
             return;
         }
-
         lastBounds = { ...bounds };
-        fetchCameras(bounds);
+        fetchAllCameras(bounds);
     }
 
-    async function fetchCameras(bounds) {
+    async function fetchAllCameras(bounds) {
         if (isFetching) return;
         isFetching = true;
+        const allCameras = [];
+        const [osmCameras, windyCameras] = await Promise.all([
+            fetchOSMCameras(bounds),
+            fetchWindyWebcams(bounds)
+        ]);
+        if (osmCameras) allCameras.push(...osmCameras);
+        if (windyCameras) allCameras.push(...windyCameras);
+        renderCameras(allCameras);
+        cameraCount = allCameras.length;
+        WorldViewHUD.updateCounter('cameras', cameraCount);
+        console.log(`[Cameras] Total: ${allCameras.length} live-feed cameras (OSM: ${osmCameras ? osmCameras.length : 0}, Windy: ${windyCameras ? windyCameras.length : 0}).`);
+        isFetching = false;
+    }
 
+    async function fetchOSMCameras(bounds) {
         const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
         const query = `[out:json][timeout:30];(
-            node["man_made"="surveillance"](${bbox});
-            node["surveillance"="camera"](${bbox});
+            node["man_made"="surveillance"]["contact:webcam"](${bbox});
+            node["man_made"="surveillance"]["url"](${bbox});
+            node["man_made"="surveillance"]["webcam"](${bbox});
+            node["surveillance"="camera"]["contact:webcam"](${bbox});
+            node["surveillance"="camera"]["url"](${bbox});
+            node["surveillance"="camera"]["webcam"](${bbox});
         );out body;`;
-
-        console.log(`[Cameras] Fetching cameras in bbox: ${bbox}`);
-        console.log(`[Cameras] Camera alt: ${WorldViewGlobe.getCameraPosition()?.alt?.toFixed(0)}m, min for fetch: ${MIN_ALTITUDE_FOR_CAMERAS}m`);
-
+        console.log(`[Cameras] OSM query for stream-URL cameras in bbox: ${bbox}`);
         try {
             let response;
             const params = new URLSearchParams({ data: query });
-
             try {
                 response = await fetch(OVERPASS_PROXY, {
                     method: 'POST',
@@ -113,97 +147,128 @@ const WorldViewCameras = (() => {
                     signal: AbortSignal.timeout(30000)
                 });
             }
-
             if (!response.ok) {
                 console.warn('[Cameras] Overpass API returned status:', response.status);
-                isFetching = false;
-                return;
+                return null;
             }
-
             const data = await response.json();
             if (!data || !data.elements) {
-                console.warn('[Cameras] No camera data returned.');
-                isFetching = false;
-                return;
+                console.warn('[Cameras] No OSM camera data returned.');
+                return null;
             }
-
-            renderCameras(data.elements);
-            cameraCount = data.elements.length;
-            WorldViewHUD.updateCounter('cameras', cameraCount);
-            console.log(`[Cameras] Loaded ${data.elements.length} cameras.`);
+            const filtered = data.elements.filter(el => {
+                if (el.type !== 'node' || el.lat == null || el.lon == null) return false;
+                const tags = el.tags || {};
+                const streamUrl = tags['contact:webcam'] || tags.url || tags.webcam || null;
+                return streamUrl && isStreamUrl(streamUrl);
+            });
+            return filtered.map(el => {
+                const tags = el.tags || {};
+                const streamUrl = tags['contact:webcam'] || tags.url || tags.webcam;
+                return {
+                    source: 'osm', lat: el.lat, lon: el.lon,
+                    streamUrl: streamUrl,
+                    streamType: detectStreamType(streamUrl),
+                    cameraType: tags['surveillance:type'] || tags['camera:type'] || 'Webcam',
+                    operator: tags.operator || tags.name || 'Unknown',
+                    indoor: tags['surveillance:zone'] === 'indoor',
+                    osmId: el.id
+                };
+            });
         } catch (err) {
-            console.error('[Cameras] Error fetching camera data:', err);
+            console.error('[Cameras] OSM fetch error:', err);
+            return null;
         }
-
-        isFetching = false;
     }
 
-    function createCameraIcon() {
-        const canvas = document.createElement('canvas');
-        canvas.width = 24;
-        canvas.height = 24;
-        const ctx = canvas.getContext('2d');
-
-        // Camera body
-        ctx.fillStyle = '#00f0ff';
-        ctx.fillRect(4, 6, 12, 10);
-
-        // Lens
-        ctx.beginPath();
-        ctx.moveTo(16, 8);
-        ctx.lineTo(22, 5);
-        ctx.lineTo(22, 17);
-        ctx.lineTo(16, 14);
-        ctx.closePath();
-        ctx.fillStyle = '#00c0dd';
-        ctx.fill();
-
-        // Recording light
-        ctx.beginPath();
-        ctx.arc(7, 9, 2, 0, Math.PI * 2);
-        ctx.fillStyle = '#ff3344';
-        ctx.fill();
-
-        return canvas.toDataURL();
+    async function fetchWindyWebcams(bounds) {
+        if (!isConfigured('windyWebcamApiKey')) return null;
+        try {
+            const params = new URLSearchParams({
+                nearby: `${((bounds.south + bounds.north) / 2).toFixed(4)},${((bounds.west + bounds.east) / 2).toFixed(4)},250`,
+                limit: '50',
+                include: 'player,location'
+            });
+            const url = `${WINDY_PROXY}?${params.toString()}`;
+            console.log('[Cameras] Windy Webcams request via proxy');
+            const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
+            if (!response.ok) {
+                console.warn('[Cameras] Windy Webcams returned status:', response.status);
+                return null;
+            }
+            const data = await response.json();
+            const webcams = data.webcams || data.result?.webcams || [];
+            if (webcams.length === 0) {
+                console.log('[Cameras] Windy returned 0 webcams in this area.');
+                return null;
+            }
+            return webcams
+                .filter(wc => {
+                    const loc = wc.location || wc.position || {};
+                    const lat = loc.latitude || loc.lat;
+                    const lon = loc.longitude || loc.lon;
+                    if (lat == null || lon == null) return false;
+                    return lat >= bounds.south && lat <= bounds.north && lon >= bounds.west && lon <= bounds.east;
+                })
+                .map(wc => {
+                    const loc = wc.location || wc.position || {};
+                    const lat = loc.latitude || loc.lat;
+                    const lon = loc.longitude || loc.lon;
+                    const playerUrl = wc.player?.day?.embed || wc.player?.lifetime?.embed || wc.player?.month?.embed || null;
+                    return {
+                        source: 'windy', lat: lat, lon: lon,
+                        streamUrl: playerUrl, streamType: 'iframe',
+                        cameraType: 'Webcam',
+                        operator: wc.title || 'Windy Webcam',
+                        indoor: false, windyId: wc.id || wc.webcamId
+                    };
+                });
+        } catch (err) {
+            console.error('[Cameras] Windy Webcams error:', err);
+            return null;
+        }
     }
 
-    let cameraIcon = null;
+    function isStreamUrl(url) {
+        if (!url || typeof url !== 'string') return false;
+        const lower = url.toLowerCase();
+        if (lower.includes('.mjpg') || lower.includes('.mjpeg') || lower.includes('mjpg')) return true;
+        if (lower.includes('.m3u8') || lower.includes('hls')) return true;
+        if (lower.startsWith('rtsp://') || lower.startsWith('rtmp://')) return true;
+        if (lower.includes('webcam') || lower.includes('camera') || lower.includes('stream') || lower.includes('live')) return true;
+        if (lower.startsWith('http://') || lower.startsWith('https://')) return true;
+        return false;
+    }
 
-    function renderCameras(elements) {
-        // Clear old
+    function detectStreamType(url) {
+        if (!url) return 'unknown';
+        const lower = url.toLowerCase();
+        if (lower.includes('.mjpg') || lower.includes('.mjpeg') || lower.includes('mjpg')) return 'mjpeg';
+        if (lower.includes('.m3u8')) return 'hls';
+        if (lower.startsWith('rtsp://') || lower.startsWith('rtmp://')) return 'rtsp';
+        return 'iframe';
+    }
+
+    function renderCameras(cameras) {
         clearEntities();
-
-        if (!cameraIcon) {
-            cameraIcon = createCameraIcon();
-        }
-
-        elements.forEach(element => {
-            if (element.type !== 'node' || element.lat == null || element.lon == null) return;
-
-            const tags = element.tags || {};
-            const cameraType = tags['surveillance:type'] || tags['camera:type'] || 'Unknown';
-            const operator = tags.operator || tags.name || 'Unknown';
-            const url = tags.url || tags['contact:webcam'] || tags.image || null;
-            const indoor = tags['surveillance:zone'] === 'indoor';
-
+        cameras.forEach(cam => {
+            if (cam.lat == null || cam.lon == null) return;
+            const icon = cam.source === 'windy' ? windyCameraIcon : osmCameraIcon;
             const entity = viewer.entities.add({
-                position: Cesium.Cartesian3.fromDegrees(element.lon, element.lat, 10),
+                position: Cesium.Cartesian3.fromDegrees(cam.lon, cam.lat, 10),
                 billboard: {
-                    image: cameraIcon,
-                    scale: 0.8,
+                    image: icon, scale: 0.8,
                     verticalOrigin: Cesium.VerticalOrigin.CENTER,
                     horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
                     disableDepthTestDistance: 0
                 },
                 properties: {
-                    type: 'camera',
-                    cameraType: cameraType,
-                    operator: operator,
-                    url: url,
-                    indoor: indoor,
-                    osmId: element.id,
-                    lat: element.lat,
-                    lon: element.lon
+                    type: 'camera', source: cam.source,
+                    cameraType: cam.cameraType, operator: cam.operator,
+                    streamUrl: cam.streamUrl, streamType: cam.streamType,
+                    indoor: cam.indoor, osmId: cam.osmId || null,
+                    windyId: cam.windyId || null,
+                    lat: cam.lat, lon: cam.lon
                 }
             });
             cameraEntities.push(entity);
@@ -223,55 +288,34 @@ const WorldViewCameras = (() => {
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
     }
 
-    // FIX 1: Show popup with VIEW FEED button
     function showCameraPopup(props) {
-        const url = props.url ? props.url.getValue() : null;
-
-        // Extract lat/lon — stored directly in properties, or fall back to entity position
+        const streamUrl = props.streamUrl ? props.streamUrl.getValue() : null;
+        const streamType = props.streamType ? props.streamType.getValue() : 'unknown';
+        const source = props.source ? props.source.getValue() : 'unknown';
         let lat = props.lat ? props.lat.getValue() : null;
         let lon = props.lon ? props.lon.getValue() : null;
-
-        // Fallback: extract from Cartesian3 entity position if lat/lon not stored
-        if ((lat == null || lon == null) && pickedEntityPosition) {
-            try {
-                const carto = Cesium.Cartographic.fromCartesian(pickedEntityPosition);
-                lat = Cesium.Math.toDegrees(carto.latitude);
-                lon = Cesium.Math.toDegrees(carto.longitude);
-            } catch (e) { /* ignore */ }
-        }
-
         const rows = [
             { key: 'TYPE', value: props.cameraType ? props.cameraType.getValue() : 'Unknown', class: 'highlight' },
             { key: 'OPERATOR', value: props.operator ? props.operator.getValue() : 'Unknown' },
+            { key: 'SOURCE', value: source === 'windy' ? 'Windy Webcams' : 'OpenStreetMap' },
             { key: 'ZONE', value: props.indoor && props.indoor.getValue() ? 'INDOOR' : 'OUTDOOR' },
-            { key: 'OSM ID', value: props.osmId ? props.osmId.getValue().toString() : 'N/A' },
-            { key: 'STREAM', value: url ? 'Available' : 'Not available', class: url ? 'highlight' : '' }
+            { key: 'STREAM', value: streamUrl ? streamType.toUpperCase() : 'Not available', class: streamUrl ? 'highlight' : '' }
         ];
-
-        if (url) {
-            rows.push({ key: 'URL', value: url });
+        if (streamUrl) {
+            rows.push({ key: 'URL', value: streamUrl.length > 50 ? streamUrl.substring(0, 50) + '...' : streamUrl });
         }
-
-        // FIX 1: Add VIEW FEED button row
         const capturedLat = lat;
         const capturedLon = lon;
-        const capturedUrl = url;
+        const capturedUrl = streamUrl;
+        const capturedType = streamType;
         rows.push({
-            type: 'button',
-            label: 'VIEW FEED',
-            onclick: () => {
-                openFeedViewer(capturedUrl, capturedLat, capturedLon);
-            }
+            type: 'button', label: 'VIEW FEED',
+            onclick: () => { openFeedViewer(capturedUrl, capturedType, capturedLat, capturedLon); }
         });
-
-        WorldViewHUD.showPopup('◎ SURVEILLANCE CAMERA', rows);
+        WorldViewHUD.showPopup('\u25CE SURVEILLANCE CAMERA', rows);
     }
 
-    // Keep track of last clicked entity position as fallback
-    let pickedEntityPosition = null;
-
-    // FIX 1: Open the feed viewer modal
-    function openFeedViewer(url, lat, lon) {
+    function openFeedViewer(url, streamType, lat, lon) {
         const modal = document.getElementById('camera-feed-modal');
         const iframeContainer = document.getElementById('feed-iframe-container');
         const iframe = document.getElementById('feed-iframe');
@@ -280,63 +324,97 @@ const WorldViewCameras = (() => {
         const unavailEl = document.getElementById('feed-unavailable');
         const loadingEl = document.getElementById('feed-loading');
         const statusEl = document.getElementById('feed-modal-status');
-
         if (!modal) return;
-
-        // Reset all containers
         iframeContainer.classList.add('hidden');
         svContainer.classList.add('hidden');
         unavailEl.classList.add('hidden');
         loadingEl.classList.remove('hidden');
         iframe.src = '';
         svImg.src = '';
-
-        // Show modal
+        const existingMjpeg = modal.querySelector('.mjpeg-feed-img');
+        if (existingMjpeg) existingMjpeg.remove();
+        const existingVideo = modal.querySelector('.hls-feed-video');
+        if (existingVideo) existingVideo.remove();
         modal.classList.remove('hidden');
 
-        if (url) {
-            // Try to load the camera's URL in an iframe
-            statusEl.textContent = 'SOURCE: ' + url.substring(0, 60) + (url.length > 60 ? '...' : '');
-
-            iframeContainer.classList.remove('hidden');
+        if (url && streamType === 'mjpeg') {
+            statusEl.textContent = 'MJPEG STREAM: ' + url.substring(0, 60) + (url.length > 60 ? '...' : '');
             loadingEl.classList.add('hidden');
-
-            // Listen for load errors on the iframe
-            iframe.onerror = () => {
-                console.warn('[Cameras] Feed iframe failed to load:', url);
-                iframeContainer.classList.add('hidden');
+            const proxyUrl = '/api/proxy-stream?url=' + encodeURIComponent(url);
+            const mjpegImg = document.createElement('img');
+            mjpegImg.className = 'mjpeg-feed-img';
+            mjpegImg.style.cssText = 'width:100%;height:100%;object-fit:contain;';
+            mjpegImg.src = proxyUrl;
+            mjpegImg.onerror = () => {
+                mjpegImg.remove();
                 tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl);
             };
-
-            // Set a timeout — if the iframe doesn't signal load in 8s, try street view
-            let iframeLoadTimeout = setTimeout(() => {
-                // iframe.contentDocument is null for cross-origin, which is normal
-                // We cannot reliably detect load failures for cross-origin iframes,
-                // so we just leave the iframe showing (it either loaded or shows a browser error)
-                console.log('[Cameras] Feed iframe timeout — showing as-is.');
-            }, 8000);
-
-            iframe.onload = () => {
-                clearTimeout(iframeLoadTimeout);
-                loadingEl.classList.add('hidden');
-                console.log('[Cameras] Feed iframe loaded.');
-            };
-
-            iframe.src = url;
-
+            iframeContainer.classList.remove('hidden');
+            iframeContainer.appendChild(mjpegImg);
+        } else if (url && streamType === 'hls') {
+            statusEl.textContent = 'HLS STREAM: ' + url.substring(0, 60) + (url.length > 60 ? '...' : '');
+            loadingEl.classList.add('hidden');
+            const proxyUrl = '/api/proxy-stream?url=' + encodeURIComponent(url);
+            const video = document.createElement('video');
+            video.className = 'hls-feed-video';
+            video.style.cssText = 'width:100%;height:100%;object-fit:contain;';
+            video.controls = true;
+            video.autoplay = true;
+            video.muted = true;
+            iframeContainer.classList.remove('hidden');
+            iframeContainer.appendChild(video);
+            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const hls = new Hls();
+                hls.loadSource(proxyUrl);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    console.warn('[Cameras] HLS.js error:', data);
+                    video.remove();
+                    tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl);
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = proxyUrl;
+                video.onerror = () => {
+                    video.remove();
+                    tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl);
+                };
+            } else {
+                video.remove();
+                statusEl.textContent = 'HLS not supported \u2014 trying iframe...';
+                loadIframePlayer(url, iframeContainer, iframe, loadingEl, statusEl, lat, lon, svContainer, svImg, unavailEl);
+            }
+        } else if (url) {
+            loadIframePlayer(url, iframeContainer, iframe, loadingEl, statusEl, lat, lon, svContainer, svImg, unavailEl);
         } else if (lat != null && lon != null) {
-            // No URL — try Street View
-            statusEl.textContent = 'NO STREAM URL — LOADING STREET VIEW...';
+            statusEl.textContent = 'NO STREAM URL \u2014 LOADING STREET VIEW...';
             tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl);
         } else {
-            // Nothing available
             loadingEl.classList.add('hidden');
             unavailEl.classList.remove('hidden');
             statusEl.textContent = 'NO FEED DATA AVAILABLE';
         }
     }
 
-    // FIX 1: Attempt to load a Street View static image
+    function loadIframePlayer(url, iframeContainer, iframe, loadingEl, statusEl, lat, lon, svContainer, svImg, unavailEl) {
+        statusEl.textContent = 'SOURCE: ' + url.substring(0, 60) + (url.length > 60 ? '...' : '');
+        iframeContainer.classList.remove('hidden');
+        loadingEl.classList.add('hidden');
+        iframe.onerror = () => {
+            console.warn('[Cameras] Feed iframe failed to load:', url);
+            iframeContainer.classList.add('hidden');
+            tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl);
+        };
+        let iframeLoadTimeout = setTimeout(() => {
+            console.log('[Cameras] Feed iframe timeout \u2014 showing as-is.');
+        }, 8000);
+        iframe.onload = () => {
+            clearTimeout(iframeLoadTimeout);
+            loadingEl.classList.add('hidden');
+            console.log('[Cameras] Feed iframe loaded.');
+        };
+        iframe.src = url;
+    }
+
     function tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl) {
         if (lat == null || lon == null) {
             loadingEl.classList.add('hidden');
@@ -344,45 +422,30 @@ const WorldViewCameras = (() => {
             statusEl.textContent = 'NO LOCATION DATA AVAILABLE';
             return;
         }
-
-        // Build Street View static API URL (key may be absent — handled gracefully)
         const svUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${lat},${lon}&heading=0&pitch=0&fov=90&key=`;
-
         statusEl.textContent = `STREET VIEW: ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-
         svImg.onload = () => {
             loadingEl.classList.add('hidden');
             svContainer.classList.remove('hidden');
-            // The Street View API returns a gray image (not an HTTP error) when there's no imagery.
-            // We show it as-is; the user sees what's available.
             statusEl.textContent = `STREET VIEW @ ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
             console.log('[Cameras] Street View image loaded.');
         };
-
         svImg.onerror = () => {
             loadingEl.classList.add('hidden');
             unavailEl.classList.remove('hidden');
             statusEl.textContent = 'STREET VIEW UNAVAILABLE';
             console.warn('[Cameras] Street View image failed to load.');
         };
-
         svImg.src = svUrl;
     }
 
-    // FIX 1: Wire up the modal close button
     function setupFeedModalClose() {
         const closeBtn = document.getElementById('feed-modal-close');
-        if (closeBtn) {
-            closeBtn.addEventListener('click', closeFeedViewer);
-        }
-
-        // Close on backdrop click
+        if (closeBtn) { closeBtn.addEventListener('click', closeFeedViewer); }
         const modal = document.getElementById('camera-feed-modal');
         if (modal) {
             const backdrop = modal.querySelector('.feed-modal-backdrop');
-            if (backdrop) {
-                backdrop.addEventListener('click', closeFeedViewer);
-            }
+            if (backdrop) { backdrop.addEventListener('click', closeFeedViewer); }
         }
     }
 
@@ -390,8 +453,13 @@ const WorldViewCameras = (() => {
         const modal = document.getElementById('camera-feed-modal');
         const iframe = document.getElementById('feed-iframe');
         if (modal) modal.classList.add('hidden');
-        // Stop iframe playback
         if (iframe) iframe.src = '';
+        if (modal) {
+            const mjpeg = modal.querySelector('.mjpeg-feed-img');
+            if (mjpeg) mjpeg.remove();
+            const hlsVideo = modal.querySelector('.hls-feed-video');
+            if (hlsVideo) { hlsVideo.pause(); hlsVideo.src = ''; hlsVideo.remove(); }
+        }
     }
 
     function clearEntities() {
@@ -402,11 +470,9 @@ const WorldViewCameras = (() => {
     function setVisible(v) {
         visible = v;
         cameraEntities.forEach(e => e.show = v);
-        if (!v) {
-            WorldViewHUD.updateCounter('cameras', 0);
-        } else {
+        if (!v) { WorldViewHUD.updateCounter('cameras', 0); }
+        else {
             WorldViewHUD.updateCounter('cameras', cameraCount);
-            // Re-fetch if needed
             lastBounds = null;
             checkAndFetchCameras();
         }
