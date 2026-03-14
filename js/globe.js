@@ -8,6 +8,9 @@ const WorldViewGlobe = (() => {
     let viewer = null;
     let google3DTileset = null;
     let hasGlobe = false; // Track whether a globe/tileset is active
+    let _fallbackGlobe = false;  // True when using fallback globe (not Google 3D Tiles)
+    let _usingLabels = true;     // True when English labels layer is active
+    let _fallbackLabelsLayer = null; // Reference to the imagery layer for toggling
 
     async function init(config) {
         console.log('[Globe] Initializing CesiumJS viewer...');
@@ -107,15 +110,33 @@ const WorldViewGlobe = (() => {
                     console.log('[Globe] Cesium Ion dark imagery loaded.');
                 } catch (imageryErr) {
                     console.warn('[Globe] Cesium Ion imagery failed, trying OSM...', imageryErr.message);
-                    // Fallback to OpenStreetMap
+                    // FIX 9: Fallback to CartoDB dark tiles (English labels + dark theme)
                     try {
-                        const osmProvider = new Cesium.OpenStreetMapImageryProvider({
-                            url: 'https://tile.openstreetmap.org/'
+                        const cartoProvider = new Cesium.UrlTemplateImageryProvider({
+                            url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+                            subdomains: ['a', 'b', 'c', 'd'],
+                            credit: new Cesium.Credit('\u00a9 OpenStreetMap contributors, \u00a9 CARTO'),
+                            minimumLevel: 0,
+                            maximumLevel: 19
                         });
-                        viewer.imageryLayers.addImageryProvider(osmProvider);
-                        console.log('[Globe] OpenStreetMap imagery loaded as fallback.');
-                    } catch (osmErr) {
-                        console.warn('[Globe] All imagery fallbacks failed:', osmErr.message);
+                        viewer.imageryLayers.addImageryProvider(cartoProvider);
+                        _fallbackLabelsLayer = viewer.imageryLayers.get(viewer.imageryLayers.length - 1);
+                        _usingLabels = true;
+                        _fallbackGlobe = true;
+                        console.log('[Globe] CartoDB dark imagery (English labels) loaded as fallback.');
+                    } catch (cartoErr) {
+                        console.warn('[Globe] CartoDB fallback failed, trying plain OSM...', cartoErr.message);
+                        try {
+                            const osmProvider = new Cesium.OpenStreetMapImageryProvider({
+                                url: 'https://tile.openstreetmap.org/'
+                            });
+                            viewer.imageryLayers.addImageryProvider(osmProvider);
+                            _fallbackGlobe = true;
+                            _usingLabels = true;
+                            console.log('[Globe] OpenStreetMap imagery loaded as final fallback.');
+                        } catch (osmErr) {
+                            console.warn('[Globe] All imagery fallbacks failed:', osmErr.message);
+                        }
                     }
                 }
             } catch (fallbackErr) {
@@ -179,8 +200,8 @@ const WorldViewGlobe = (() => {
 
         const controller = viewer.scene.screenSpaceCameraController;
 
-        // Min zoom: 200km altitude (200,000 meters)
-        controller.minimumZoomDistance = 200000;
+        // FIX 2: Min zoom: 200m altitude (not 200km)
+        controller.minimumZoomDistance = 200;
         // Max zoom: 35,000km altitude (35,000,000 meters)
         controller.maximumZoomDistance = 35000000;
 
@@ -188,7 +209,7 @@ const WorldViewGlobe = (() => {
         // Limit pitch to prevent viewing from below the globe
         controller.enableTilt = true;
 
-        console.log('[Globe] Camera constraints set: min 200km, max 35,000km altitude.');
+        console.log('[Globe] Camera constraints set: min 200m, max 35,000km altitude.');
 
         // Continuously enforce camera stays pointed at Earth
         // If camera somehow flies away, pull it back
@@ -210,13 +231,13 @@ const WorldViewGlobe = (() => {
                     });
                 }
 
-                // Prevent going underground (below min distance from surface)
-                if (altitude < 100000) {
+                // FIX 2: Prevent going underground — guard at 100m (not 100km)
+                if (altitude < 100) {
                     viewer.camera.setView({
                         destination: Cesium.Cartesian3.fromDegrees(
                             Cesium.Math.toDegrees(cameraPos.longitude),
                             Cesium.Math.toDegrees(cameraPos.latitude),
-                            200000
+                            200
                         )
                     });
                 }
@@ -234,9 +255,9 @@ const WorldViewGlobe = (() => {
 
     function flyTo(longitude, latitude, altitude = 1500000) {
         if (!viewer) return;
-        // Clamp altitude to constraints
-        const clampedAlt = Math.max(200000, Math.min(altitude, 35000000));
-        console.log(`[Globe] Flying to: ${latitude.toFixed(4)}, ${longitude.toFixed(4)} @ ${(clampedAlt/1000).toFixed(0)}km`);
+        // FIX 2: Clamp altitude to constraints — min 200m
+        const clampedAlt = Math.max(200, Math.min(altitude, 35000000));
+        console.log(`[Globe] Flying to: ${latitude.toFixed(4)}, ${longitude.toFixed(4)} @ ${(clampedAlt/1000).toFixed(3)}km`);
         viewer.camera.flyTo({
             destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, clampedAlt),
             duration: 2.0,
@@ -329,5 +350,52 @@ const WorldViewGlobe = (() => {
         }
     }
 
-    return { init, getViewer, flyTo, getCameraPosition, getViewportBounds };
+    /**
+     * FIX 9: Toggle English place-name labels on/off for the fallback globe.
+     * Switches between CartoDB dark_all (with labels) and dark_nolabels tiles.
+     */
+    function toggleLabels() {
+        if (!viewer || !_fallbackGlobe) {
+            console.log('[Globe] Label toggle not available — using Google 3D Tiles or no globe.');
+            return;
+        }
+
+        _usingLabels = !_usingLabels;
+
+        // Remove all current imagery layers and re-add the selected variant
+        if (viewer.imageryLayers) {
+            viewer.imageryLayers.removeAll();
+        }
+
+        const tileUrl = _usingLabels
+            ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
+            : 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png';
+
+        try {
+            const cartoProvider = new Cesium.UrlTemplateImageryProvider({
+                url: tileUrl,
+                subdomains: ['a', 'b', 'c', 'd'],
+                credit: new Cesium.Credit('\u00a9 OpenStreetMap contributors, \u00a9 CARTO'),
+                minimumLevel: 0,
+                maximumLevel: 19
+            });
+            viewer.imageryLayers.addImageryProvider(cartoProvider);
+            _fallbackLabelsLayer = viewer.imageryLayers.get(0);
+            console.log(`[Globe] Label toggle: ${_usingLabels ? 'EN LABELS ON' : 'NO LABELS'}`);
+        } catch (e) {
+            console.warn('[Globe] Failed to toggle label layer:', e.message);
+        }
+
+        return _usingLabels;
+    }
+
+    function isUsingLabels() {
+        return _usingLabels;
+    }
+
+    function hasFallbackGlobe() {
+        return _fallbackGlobe;
+    }
+
+    return { init, getViewer, flyTo, getCameraPosition, getViewportBounds, toggleLabels, isUsingLabels, hasFallbackGlobe };
 })();
