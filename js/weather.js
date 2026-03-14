@@ -32,21 +32,22 @@ const WorldViewWeather = (() => {
         'Temperature Extremes': { icon: '\ud83c\udf21', color: '#ff8800', label: 'TEMP' }
     };
 
-    // NWS severity colors
+    // NWS severity colors — FIX 1: reduced alpha values for fills
     const NWS_SEVERITY_COLORS = {
-        'Extreme': Cesium.Color.fromCssColorString('#ff3344').withAlpha(0.25),
-        'Severe': Cesium.Color.fromCssColorString('#ff8800').withAlpha(0.2),
-        'Moderate': Cesium.Color.fromCssColorString('#ffcc00').withAlpha(0.15),
-        'Minor': Cesium.Color.fromCssColorString('#00cc44').withAlpha(0.1),
-        'Unknown': Cesium.Color.fromCssColorString('#888888').withAlpha(0.1)
+        'Extreme': Cesium.Color.fromCssColorString('#ff3344').withAlpha(0.12),
+        'Severe': Cesium.Color.fromCssColorString('#ff8800').withAlpha(0.10),
+        'Moderate': Cesium.Color.fromCssColorString('#ffcc00').withAlpha(0.08),
+        'Minor': Cesium.Color.fromCssColorString('#00cc44').withAlpha(0.06),
+        'Unknown': Cesium.Color.fromCssColorString('#888888').withAlpha(0.05)
     };
 
+    // NWS severity outline colors — FIX 1: 1px solid border only
     const NWS_SEVERITY_OUTLINES = {
-        'Extreme': Cesium.Color.fromCssColorString('#ff3344').withAlpha(0.7),
-        'Severe': Cesium.Color.fromCssColorString('#ff8800').withAlpha(0.6),
-        'Moderate': Cesium.Color.fromCssColorString('#ffcc00').withAlpha(0.5),
-        'Minor': Cesium.Color.fromCssColorString('#00cc44').withAlpha(0.4),
-        'Unknown': Cesium.Color.fromCssColorString('#888888').withAlpha(0.3)
+        'Extreme': Cesium.Color.fromCssColorString('#ff3344').withAlpha(0.6),
+        'Severe': Cesium.Color.fromCssColorString('#ff8800').withAlpha(0.5),
+        'Moderate': Cesium.Color.fromCssColorString('#ffcc00').withAlpha(0.4),
+        'Minor': Cesium.Color.fromCssColorString('#00cc44').withAlpha(0.3),
+        'Unknown': Cesium.Color.fromCssColorString('#888888').withAlpha(0.2)
     };
 
     function init(cesiumViewer) {
@@ -69,11 +70,15 @@ const WorldViewWeather = (() => {
         if (!visible) return;
 
         try {
+            console.log('[Weather] Fetching EONET events...');
             let response;
             try {
                 response = await fetch(EONET_API, { signal: AbortSignal.timeout(8000) });
-            } catch {
+                console.log('[Weather] EONET proxy response status:', response.status);
+            } catch (proxyErr) {
+                console.log('[Weather] EONET proxy failed, trying direct...', proxyErr.message);
                 response = await fetch(EONET_DIRECT, { signal: AbortSignal.timeout(15000) });
+                console.log('[Weather] EONET direct response status:', response.status);
             }
 
             if (!response.ok) {
@@ -83,7 +88,7 @@ const WorldViewWeather = (() => {
 
             const data = await response.json();
             if (!data || !data.events) {
-                console.warn('[Weather] No EONET event data.');
+                console.warn('[Weather] No EONET event data. Response keys:', Object.keys(data || {}));
                 return;
             }
 
@@ -115,25 +120,29 @@ const WorldViewWeather = (() => {
 
                 if (lon == null || lat == null) return;
 
+                // FIX 1: Reduced marker size — pixelSize 6 (was 10), label scale 0.7
+                // FIX 2: disableDepthTestDistance: 0 so markers are hidden behind globe
                 const entity = viewer.entities.add({
                     position: Cesium.Cartesian3.fromDegrees(lon, lat, 5000),
                     point: {
-                        pixelSize: 10,
+                        pixelSize: 6,
                         color: Cesium.Color.fromCssColorString(style.color),
                         outlineColor: Cesium.Color.fromCssColorString(style.color).withAlpha(0.5),
-                        outlineWidth: 3,
-                        disableDepthTestDistance: Number.POSITIVE_INFINITY
+                        outlineWidth: 1,
+                        disableDepthTestDistance: 0,
+                        heightReference: Cesium.HeightReference.NONE
                     },
                     label: {
                         text: style.label,
-                        font: '10px Share Tech Mono',
+                        font: '9px Share Tech Mono',
                         fillColor: Cesium.Color.fromCssColorString(style.color),
                         outlineColor: Cesium.Color.BLACK,
                         outlineWidth: 2,
                         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                        pixelOffset: new Cesium.Cartesian2(0, -16),
-                        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                        scale: 0.9
+                        pixelOffset: new Cesium.Cartesian2(0, -12),
+                        disableDepthTestDistance: 0,
+                        scale: 0.7,
+                        scaleByDistance: new Cesium.NearFarScalar(1.5e6, 1.0, 1.5e7, 0.3)
                     },
                     properties: {
                         type: 'eonet',
@@ -154,13 +163,16 @@ const WorldViewWeather = (() => {
         if (!visible) return;
 
         try {
+            console.log('[Weather] Fetching NWS alerts...');
             let response;
             try {
                 response = await fetch(NWS_API, {
                     signal: AbortSignal.timeout(8000),
                     headers: { 'User-Agent': 'WorldView-Dashboard/1.0' }
                 });
-            } catch {
+                console.log('[Weather] NWS proxy response status:', response.status);
+            } catch (proxyErr) {
+                console.log('[Weather] NWS proxy failed, trying direct...', proxyErr.message);
                 response = await fetch(NWS_DIRECT, {
                     signal: AbortSignal.timeout(15000),
                     headers: {
@@ -168,6 +180,7 @@ const WorldViewWeather = (() => {
                         'Accept': 'application/geo+json'
                     }
                 });
+                console.log('[Weather] NWS direct response status:', response.status);
             }
 
             if (!response.ok) {
@@ -177,7 +190,7 @@ const WorldViewWeather = (() => {
 
             const data = await response.json();
             if (!data || !data.features) {
-                console.warn('[Weather] No NWS alert data.');
+                console.warn('[Weather] No NWS alert data. Response keys:', Object.keys(data || {}));
                 return;
             }
 
@@ -216,13 +229,14 @@ const WorldViewWeather = (() => {
                         positions.push(c[0], c[1]);
                     });
 
+                    // FIX 1: outlineWidth 1 (was 2), alpha reduced in color defs above
                     const entity = viewer.entities.add({
                         polygon: {
                             hierarchy: Cesium.Cartesian3.fromDegreesArray(positions),
                             material: fillColor,
                             outline: true,
                             outlineColor: outlineColor,
-                            outlineWidth: 2,
+                            outlineWidth: 1,
                             height: 0,
                             classificationType: Cesium.ClassificationType.BOTH
                         },
@@ -248,13 +262,14 @@ const WorldViewWeather = (() => {
                             positions.push(c[0], c[1]);
                         });
 
+                        // FIX 1: outlineWidth 1 (was 2)
                         const entity = viewer.entities.add({
                             polygon: {
                                 hierarchy: Cesium.Cartesian3.fromDegreesArray(positions),
                                 material: fillColor,
                                 outline: true,
                                 outlineColor: outlineColor,
-                                outlineWidth: 2,
+                                outlineWidth: 1,
                                 height: 0,
                                 classificationType: Cesium.ClassificationType.BOTH
                             },

@@ -91,6 +91,7 @@ const WorldViewCameras = (() => {
         );out body;`;
 
         console.log(`[Cameras] Fetching cameras in bbox: ${bbox}`);
+        console.log(`[Cameras] Camera alt: ${WorldViewGlobe.getCameraPosition()?.alt?.toFixed(0)}m, min for fetch: ${MIN_ALTITUDE_FOR_CAMERAS}m`);
 
         try {
             let response;
@@ -191,7 +192,7 @@ const WorldViewCameras = (() => {
                     scale: 0.8,
                     verticalOrigin: Cesium.VerticalOrigin.CENTER,
                     horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-                    disableDepthTestDistance: Number.POSITIVE_INFINITY
+                    disableDepthTestDistance: 0
                 },
                 properties: {
                     type: 'camera',
