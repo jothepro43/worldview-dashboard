@@ -145,6 +145,21 @@
                 console.error('[App] \u2717 Cameras init failed:', err);
             }
 
+            // FIX 9: Wire up labels toggle button
+            const labelsToggle = document.getElementById('labels-toggle');
+            if (labelsToggle) {
+                labelsToggle.addEventListener('click', function() {
+                    const labelsOn = WorldViewGlobe.toggleLabels();
+                    if (labelsOn === undefined) return;
+                    this.classList.toggle('active', labelsOn);
+                    this.textContent = labelsOn ? 'EN LABELS' : 'NO LABELS';
+                });
+                // Hide button if Google 3D Tiles are active
+                if (!WorldViewGlobe.hasFallbackGlobe()) {
+                    labelsToggle.style.display = 'none';
+                }
+            }
+
             // Step 5: Complete
             const bootTime = ((performance.now() - t0) / 1000).toFixed(2);
             WorldViewHUD.setLoadingProgress(100, `Systems online. Boot: ${bootTime}s`);
