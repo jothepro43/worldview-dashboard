@@ -85,6 +85,7 @@ const WorldViewFlights = (() => {
     function init(cesiumViewer) {
         viewer = cesiumViewer;
         console.log('[Flights] Initializing aircraft tracking...');
+        console.log('[Flights] Scene primitives available:', !!viewer.scene.primitives);
 
         // Pre-create icons
         civilianIcon = createAircraftIcon('#00d4ff', 32);
@@ -236,11 +237,11 @@ const WorldViewFlights = (() => {
             { key: 'TYPE', value: data.isMilitary ? 'MILITARY' : 'CIVILIAN', class: data.isMilitary ? 'danger' : '' },
             { key: 'ALTITUDE', value: data.altitude ? Math.round(data.altitude).toLocaleString() + ' m' : 'N/A' },
             { key: 'SPEED', value: data.velocity ? (data.velocity * 3.6).toFixed(0) + ' km/h' : 'N/A' },
-            { key: 'HEADING', value: data.trueTrack != null ? data.trueTrack.toFixed(1) + '°' : 'N/A' },
+            { key: 'HEADING', value: data.trueTrack != null ? data.trueTrack.toFixed(1) + '\u00b0' : 'N/A' },
             { key: 'VERT RATE', value: data.verticalRate != null ? data.verticalRate.toFixed(1) + ' m/s' : 'N/A', class: data.verticalRate > 0 ? 'highlight' : (data.verticalRate < 0 ? 'warning' : '') }
         ];
 
-        const title = data.isMilitary ? '⚠ MILITARY AIRCRAFT' : '✈ AIRCRAFT';
+        const title = data.isMilitary ? '\u26a0 MILITARY AIRCRAFT' : '\u2708 AIRCRAFT';
         WorldViewHUD.showPopup(title, rows);
     }
 

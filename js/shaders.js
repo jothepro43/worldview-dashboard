@@ -150,6 +150,7 @@ const WorldViewShaders = (() => {
         viewer = cesiumViewer;
         startTime = Date.now();
         console.log('[Shaders] Initializing post-processing stages...');
+        console.log('[Shaders] PostProcessStages available:', !!viewer.scene.postProcessStages);
 
         try {
             // Create NVG stage

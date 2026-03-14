@@ -33,6 +33,7 @@ const WorldViewSatellites = (() => {
     function init(cesiumViewer) {
         viewer = cesiumViewer;
         console.log('[Satellites] Initializing satellite tracking...');
+        console.log('[Satellites] satellite.js available:', typeof satellite !== 'undefined');
 
         pointCollection = new Cesium.PointPrimitiveCollection();
         viewer.scene.primitives.add(pointCollection);
