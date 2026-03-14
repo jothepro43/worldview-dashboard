@@ -1,0 +1,27 @@
+{
+  "name": "worldview-dashboard",
+  "version": "1.0.0",
+  "description": "WorldView - Browser-based geospatial intelligence dashboard with real-time aircraft, satellite, earthquake, weather, and camera tracking",
+  "main": "server/proxy.js",
+  "scripts": {
+    "start": "node server/proxy.js",
+    "dev": "node server/proxy.js"
+  },
+  "keywords": [
+    "geospatial",
+    "intelligence",
+    "dashboard",
+    "cesium",
+    "satellite",
+    "aircraft",
+    "tracking",
+    "globe",
+    "3d"
+  ],
+  "author": "WorldView Dev",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2"
+  }
+}
