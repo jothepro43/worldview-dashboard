@@ -7,15 +7,53 @@
     'use strict';
 
     // =============================================
-    // CONFIGURATION - Replace with your API keys
+    // MASTER CONFIGURATION — All API Keys
+    // Replace each YOUR_* placeholder with your key.
+    // Any key left as a placeholder will be skipped
+    // gracefully — the feature simply won't load.
     // =============================================
     const CONFIG = {
+        // Cesium Ion — https://cesium.com/ion/tokens
         cesiumIonToken: 'YOUR_CESIUM_ION_TOKEN',
-        googleMapsApiKey: 'YOUR_GOOGLE_MAPS_API_KEY'
+
+        // Google Maps (Map Tiles API) — https://console.cloud.google.com
+        googleMapsApiKey: 'YOUR_GOOGLE_MAPS_API_KEY',
+
+        // OpenSky Network (Basic Auth for higher rate limits)
+        // https://opensky-network.org/
+        openskyUsername: 'YOUR_OPENSKY_USERNAME',
+        openskyPassword: 'YOUR_OPENSKY_PASSWORD',
+
+        // ADSB.fi — free, no auth required. Set false to disable.
+        adsbfiEnabled: true,
+
+        // ADS-B Exchange (RapidAPI) — https://rapidapi.com/adsbx/api/adsbx-flight-sim-traffic
+        adsbExchangeApiKey: 'YOUR_ADSBEXCHANGE_API_KEY',
+
+        // Windy Webcams API — https://api.windy.com/
+        windyWebcamApiKey: 'YOUR_WINDY_WEBCAM_API_KEY',
+
+        // ACLED (Armed Conflict) — https://acleddata.com/
+        acledApiKey: 'YOUR_ACLED_API_KEY',
+        acledEmail: 'YOUR_ACLED_EMAIL'
     };
+
+    // Make CONFIG globally accessible so other modules can read it
+    window.WorldViewConfig = CONFIG;
     // =============================================
 
     let viewer = null;
+
+    /**
+     * Helper: returns true if a config value is set (not a YOUR_* placeholder).
+     */
+    function isConfigured(key) {
+        const val = CONFIG[key];
+        if (val === undefined || val === null || val === false) return false;
+        if (typeof val === 'string' && val.startsWith('YOUR_')) return false;
+        if (typeof val === 'string' && val.trim() === '') return false;
+        return true;
+    }
 
     async function boot() {
         const t0 = performance.now();
@@ -24,6 +62,26 @@
         console.log('%c  Phase 1 Initializing...', 'color: #00ff88');
         console.log('%c========================================', 'color: #00f0ff');
         console.log('[App] Boot started at', new Date().toISOString());
+
+        // ── Config diagnostics ──────────────────────────────────────────────
+        console.log('%c[Config] API Key Status:', 'color: #ffaa00; font-weight: bold');
+        const configKeys = [
+            ['cesiumIonToken', 'Cesium Ion'],
+            ['googleMapsApiKey', 'Google Maps'],
+            ['openskyUsername', 'OpenSky (user)'],
+            ['openskyPassword', 'OpenSky (pass)'],
+            ['adsbfiEnabled', 'ADSB.fi'],
+            ['adsbExchangeApiKey', 'ADS-B Exchange'],
+            ['windyWebcamApiKey', 'Windy Webcams'],
+            ['acledApiKey', 'ACLED'],
+            ['acledEmail', 'ACLED Email']
+        ];
+        configKeys.forEach(([key, label]) => {
+            const ok = isConfigured(key);
+            const icon = ok ? '\u2713' : '\u2717';
+            const color = ok ? 'color: #00ff88' : 'color: #ff3344';
+            console.log(`%c  ${icon} ${label}`, color);
+        });
 
         // Verify dependencies are loaded
         if (typeof Cesium === 'undefined') {
@@ -175,8 +233,8 @@
             console.log('%c  All systems online.', 'color: #00ff88');
             console.log('%c========================================', 'color: #00ff88');
 
-            // Step 6: Config warnings
-            if (CONFIG.cesiumIonToken === 'YOUR_CESIUM_ION_TOKEN') {
+            // Step 6: Config warnings (only for critical keys)
+            if (!isConfigured('cesiumIonToken')) {
                 console.warn(
                     '\n%c[CONFIG] Cesium Ion token not set!',
                     'color: #ffaa00; font-size: 14px; font-weight: bold'
@@ -186,7 +244,7 @@
                 console.warn('  3. Paste in js/app.js \u2192 CONFIG.cesiumIonToken\n');
             }
 
-            if (CONFIG.googleMapsApiKey === 'YOUR_GOOGLE_MAPS_API_KEY') {
+            if (!isConfigured('googleMapsApiKey')) {
                 console.warn(
                     '\n%c[CONFIG] Google Maps API key not set!',
                     'color: #ffaa00; font-size: 14px; font-weight: bold'
