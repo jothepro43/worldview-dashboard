@@ -9,10 +9,31 @@ const WorldViewSatellites = (() => {
     let viewer = null;
     let pointCollection = null;
     let orbitEntities = [];
-    let satelliteRecords = []; // { name, satrec, group, noradId }
+    let satelliteRecords = []; // { name, satrec, group, noradId, category, color (rgb array), satColor (Cesium.Color), pixelSize }
     let animationFrameId = null;
     let visible = true;
     let selectedSatellite = null;
+
+    // FIX 6: Category visibility and counts
+    const categoryVisibility = {
+        military: true,
+        starlink: true,
+        gps: true,
+        imaging: true,
+        iss: true,
+        debris: true,
+        commercial: true
+    };
+
+    const categoryCounts = {
+        military: 0,
+        starlink: 0,
+        gps: 0,
+        imaging: 0,
+        iss: 0,
+        debris: 0,
+        commercial: 0
+    };
 
     // TLE data sources — FIX 3: use CelesTrak GP format which is more reliable
     const TLE_SOURCES = [
@@ -30,6 +51,139 @@ const WorldViewSatellites = (() => {
         active: 2000
     };
 
+    // =============================================
+    // FIX 5: Satellite Classification
+    // =============================================
+
+    /**
+     * Classify a satellite by name and group.
+     * Returns { category, color (Cesium.Color), pixelSize }
+     */
+    function classifySatellite(name, group) {
+        const n = (name || '').toUpperCase();
+
+        // ISS — check first so it overrides other matches
+        if (n === 'ISS (ZARYA)' || n.includes('ISS')) {
+            return {
+                category: 'iss',
+                color: Cesium.Color.WHITE,
+                pixelSize: 10
+            };
+        }
+
+        // Debris / rocket bodies
+        if (n.includes('DEB') || n.includes('R/B') || n.includes('DEBRIS')) {
+            return {
+                category: 'debris',
+                color: Cesium.Color.fromCssColorString('#888888'),
+                pixelSize: 4
+            };
+        }
+
+        // Starlink
+        if (n.includes('STARLINK')) {
+            return {
+                category: 'starlink',
+                color: Cesium.Color.fromCssColorString('#bb44ff'),
+                pixelSize: 6
+            };
+        }
+
+        // GPS
+        if (n.includes('GPS') || n.includes('NAVSTAR') || group === 'gps') {
+            return {
+                category: 'gps',
+                color: Cesium.Color.fromCssColorString('#ffdd00'),
+                pixelSize: 6
+            };
+        }
+
+        // Military
+        const militaryKeywords = [
+            'USA-', 'NROL', 'LACROSSE', 'MENTOR', 'ORION', 'TRUMPET', 'VORTEX',
+            'MAGNUM', 'KEYHOLE', 'MISTY', 'NOSS', 'SDS', 'MILSTAR', 'AEHF', 'WGS',
+            'SBIRS', 'DSP', 'MUOS', 'GSSAP', 'NEMESIS', 'COSMOS'
+        ];
+        for (const kw of militaryKeywords) {
+            if (n.includes(kw)) {
+                return {
+                    category: 'military',
+                    color: Cesium.Color.fromCssColorString('#ff3344'),
+                    pixelSize: 6
+                };
+            }
+        }
+
+        // Imaging / Earth Observation
+        const imagingKeywords = [
+            'LANDSAT', 'SENTINEL', 'WORLDVIEW', 'PLEIADES', 'SPOT', 'KOMPSAT',
+            'RADARSAT', 'TERRA', 'AQUA', 'SUOMI', 'JPSS', 'NOAA', 'GOES',
+            'HIMAWARI', 'METEOSAT'
+        ];
+        for (const kw of imagingKeywords) {
+            if (n.includes(kw)) {
+                return {
+                    category: 'imaging',
+                    color: Cesium.Color.fromCssColorString('#ff8800'),
+                    pixelSize: 6
+                };
+            }
+        }
+
+        // Commercial / Other (default)
+        return {
+            category: 'commercial',
+            color: Cesium.Color.fromCssColorString('#00ddff'),
+            pixelSize: 6
+        };
+    }
+
+    // =============================================
+    // FIX 6: Filter Panel Wiring
+    // =============================================
+
+    function initFilterPanel() {
+        // Wire up checkbox change events
+        const panel = document.getElementById('hud-sat-filters');
+        if (!panel) return;
+
+        panel.querySelectorAll('input[type="checkbox"][data-sat-cat]').forEach(checkbox => {
+            checkbox.addEventListener('change', function () {
+                const cat = this.getAttribute('data-sat-cat');
+                if (cat && categoryVisibility.hasOwnProperty(cat)) {
+                    categoryVisibility[cat] = this.checked;
+                    // Re-render immediately
+                    updatePositions();
+                }
+            });
+        });
+    }
+
+    function updateCategoryCountDisplay() {
+        Object.keys(categoryCounts).forEach(cat => {
+            const el = document.getElementById('sat-count-' + cat);
+            if (el) el.textContent = categoryCounts[cat];
+        });
+    }
+
+    function resetCategoryCounts() {
+        Object.keys(categoryCounts).forEach(k => { categoryCounts[k] = 0; });
+    }
+
+    function showFilterPanel() {
+        const panel = document.getElementById('hud-sat-filters');
+        if (panel) panel.classList.remove('hidden');
+    }
+
+    function hideFilterPanel() {
+        const panel = document.getElementById('hud-sat-filters');
+        if (panel) panel.classList.add('hidden');
+    }
+
+    // =============================================
+    // Core init
+    // =============================================
+
     function init(cesiumViewer) {
         viewer = cesiumViewer;
         console.log('[Satellites] Initializing satellite tracking...');
@@ -46,6 +200,9 @@ const WorldViewSatellites = (() => {
         // Setup click handler
         setupClickHandler();
 
+        // FIX 6: Initialize filter panel checkboxes
+        initFilterPanel();
+
         // Fetch TLE data
         fetchAllTLEs();
 
@@ -54,6 +211,9 @@ const WorldViewSatellites = (() => {
 
     async function fetchAllTLEs() {
         let totalLoaded = 0;
+
+        // Reset category counts before loading
+        resetCategoryCounts();
 
         for (const source of TLE_SOURCES) {
             try {
@@ -98,6 +258,13 @@ const WorldViewSatellites = (() => {
                 satelliteRecords.push(...limited);
                 totalLoaded += limited.length;
 
+                // Tally category counts
+                limited.forEach(rec => {
+                    if (categoryCounts.hasOwnProperty(rec.category)) {
+                        categoryCounts[rec.category]++;
+                    }
+                });
+
                 console.log(`[Satellites] Loaded ${limited.length} from ${source.group} (${records.length} total available).`);
                 WorldViewHUD.updateCounter('satellites', totalLoaded);
             } catch (err) {
@@ -110,6 +277,9 @@ const WorldViewSatellites = (() => {
         if (satelliteRecords.length === 0) {
             console.warn('[Satellites] WARNING: No satellites loaded from any source!');
         }
+
+        // Update filter panel counts
+        updateCategoryCountDisplay();
 
         // Start animation loop
         startUpdateLoop();
@@ -130,12 +300,19 @@ const WorldViewSatellites = (() => {
                     const satrec = satellite.twoline2satrec(tleLine1, tleLine2);
                     if (satrec) {
                         const noradId = tleLine1.substring(2, 7).trim();
+
+                        // FIX 5: Classify satellite by name and group
+                        const classification = classifySatellite(name, group);
+
                         records.push({
                             name: name,
                             satrec: satrec,
                             group: group,
                             noradId: noradId,
-                            color: color,
+                            color: color,           // original rgb array (kept for orbit line color)
+                            category: classification.category,
+                            satColor: classification.color,
+                            pixelSize: classification.pixelSize,
                             tleLine1: tleLine1,
                             tleLine2: tleLine2
                         });
@@ -188,6 +365,9 @@ const WorldViewSatellites = (() => {
         const now = new Date();
 
         satelliteRecords.forEach((rec, index) => {
+            // FIX 6: Skip satellites whose category is hidden
+            if (!categoryVisibility[rec.category]) return;
+
             const pos = computePosition(rec.satrec, now);
             if (!pos || isNaN(pos.latitude) || isNaN(pos.longitude)) return;
 
@@ -196,34 +376,16 @@ const WorldViewSatellites = (() => {
 
             const position = Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, alt);
 
-            let pixelSize = 2;
-            let color;
-
-            switch (rec.group) {
-                case 'station':
-                    pixelSize = 6;
-                    color = Cesium.Color.fromBytes(0, 255, 200, 255);
-                    break;
-                case 'gps':
-                    pixelSize = 4;
-                    color = Cesium.Color.fromBytes(100, 200, 255, 255);
-                    break;
-                case 'starlink':
-                    pixelSize = 2;
-                    color = Cesium.Color.fromBytes(180, 180, 255, 180);
-                    break;
-                default:
-                    pixelSize = 2;
-                    color = Cesium.Color.fromBytes(0, 255, 136, 200);
-                    break;
-            }
+            // FIX 5: Use classified color and pixel size
+            const color = rec.satColor || Cesium.Color.fromCssColorString('#00ddff');
+            const pixelSize = rec.pixelSize || 5;
 
             // FIX 2: disableDepthTestDistance: 0 so satellites behind Earth are hidden
             pointCollection.add({
                 position: position,
                 pixelSize: pixelSize,
                 color: color,
-                outlineColor: Cesium.Color.fromBytes(rec.color[0], rec.color[1], rec.color[2], 80),
+                outlineColor: color.withAlpha(0.3),
                 outlineWidth: 1,
                 disableDepthTestDistance: 0,
                 id: {
@@ -232,6 +394,7 @@ const WorldViewSatellites = (() => {
                     name: rec.name,
                     noradId: rec.noradId,
                     group: rec.group,
+                    category: rec.category,
                     altitude: alt / 1000, // back to km
                     speed: pos.speed,
                     inclination: rec.satrec.inclo ? Cesium.Math.toDegrees(rec.satrec.inclo) : null
@@ -285,13 +448,14 @@ const WorldViewSatellites = (() => {
             { key: 'NAME', value: data.name || 'Unknown', class: 'highlight' },
             { key: 'NORAD ID', value: data.noradId || 'N/A' },
             { key: 'GROUP', value: data.group ? data.group.toUpperCase() : 'N/A' },
+            { key: 'TYPE', value: data.category ? data.category.toUpperCase() : 'N/A' },
             { key: 'ALTITUDE', value: data.altitude ? data.altitude.toFixed(1) + ' km' : 'N/A' },
             { key: 'VELOCITY', value: data.speed ? data.speed.toFixed(2) + ' km/s' : 'N/A' },
             { key: 'PERIOD', value: period },
-            { key: 'INCLINATION', value: data.inclination != null ? data.inclination.toFixed(2) + '\u00b0' : 'N/A' }
+            { key: 'INCLINATION', value: data.inclination != null ? data.inclination.toFixed(2) + '°' : 'N/A' }
         ];
 
-        WorldViewHUD.showPopup('\u25c9 SATELLITE', rows);
+        WorldViewHUD.showPopup('◉ SATELLITE', rows);
     }
 
     function drawOrbit(index) {
@@ -320,13 +484,16 @@ const WorldViewSatellites = (() => {
         }
 
         if (positions.length >= 6) {
+            // Use the satellite's classified color for the orbit line
+            const orbitColor = rec.satColor
+                ? rec.satColor.withAlpha(0.6)
+                : Cesium.Color.fromBytes(rec.color[0], rec.color[1], rec.color[2], 150);
+
             const entity = viewer.entities.add({
                 polyline: {
                     positions: Cesium.Cartesian3.fromDegreesArrayHeights(positions),
                     width: 1.5,
-                    material: new Cesium.ColorMaterialProperty(
-                        Cesium.Color.fromBytes(rec.color[0], rec.color[1], rec.color[2], 150)
-                    ),
+                    material: new Cesium.ColorMaterialProperty(orbitColor),
                     arcType: Cesium.ArcType.NONE
                 }
             });
@@ -344,10 +511,14 @@ const WorldViewSatellites = (() => {
         visible = v;
         if (pointCollection) pointCollection.show = v;
         orbitEntities.forEach(e => e.show = v);
-        if (!v) {
-            WorldViewHUD.updateCounter('satellites', 0);
-        } else {
+
+        // FIX 6: Show/hide filter panel based on satellite layer visibility
+        if (v) {
+            showFilterPanel();
             WorldViewHUD.updateCounter('satellites', satelliteRecords.length);
+        } else {
+            hideFilterPanel();
+            WorldViewHUD.updateCounter('satellites', 0);
         }
     }
 
@@ -359,5 +530,5 @@ const WorldViewSatellites = (() => {
         }
     }
 
-    return { init, setVisible, destroy };
+    return { init, setVisible, destroy, classifySatellite };
 })();
