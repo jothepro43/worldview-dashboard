@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorldView | Geospatial Intelligence Dashboard</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+    <!-- CesiumJS -->
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.124/Build/Cesium/Cesium.js"></script>
+
+    <!-- satellite.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.1.4/satellite.min.js"></script>
+
+    <!-- App Styles -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Cesium Container -->
+    <div id="cesiumContainer"></div>
+
+    <!-- HUD Overlay -->
+    <div id="hud-overlay">
+        <!-- Top Left: Logo -->
+        <div id="hud-logo">
+            <div class="logo-icon">&#9670;</div>
+            <div class="logo-text">
+                <span class="logo-title">WORLDVIEW</span>
+                <span class="logo-subtitle">GEOSPATIAL INTELLIGENCE</span>
+            </div>
+        </div>
+
+        <!-- Top Center: Search Bar -->
+        <div id="hud-search">
+            <div class="search-container">
+                <span class="search-icon">&#8981;</span>
+                <input type="text" id="search-input" placeholder="Search location..." autocomplete="off">
+                <span class="search-hint">ENTER</span>
+            </div>
+        </div>
+
+        <!-- Top Right: Counters -->
+        <div id="hud-counters">
+            <div class="counter-item" id="counter-aircraft">
+                <span class="counter-icon">&#9992;</span>
+                <span class="counter-label">AIRCRAFT</span>
+                <span class="counter-value" id="aircraft-count">0</span>
+            </div>
+            <div class="counter-item" id="counter-satellites">
+                <span class="counter-icon">&#9673;</span>
+                <span class="counter-label">SATELLITES</span>
+                <span class="counter-value" id="satellite-count">0</span>
+            </div>
+            <div class="counter-item" id="counter-events">
+                <span class="counter-icon">&#9888;</span>
+                <span class="counter-label">EVENTS</span>
+                <span class="counter-value" id="event-count">0</span>
+            </div>
+            <div class="counter-item" id="counter-cameras">
+                <span class="counter-icon">&#9678;</span>
+                <span class="counter-label">CAMERAS</span>
+                <span class="counter-value" id="camera-count">0</span>
+            </div>
+        </div>
+
+        <!-- Left Sidebar: Layer Toggles -->
+        <div id="hud-layers">
+            <div class="layer-title">LAYERS</div>
+            <button class="layer-btn active" data-layer="aircraft">
+                <span class="layer-icon">&#9992;</span>
+                <span class="layer-name">Aircraft</span>
+                <span class="layer-status"></span>
+            </button>
+            <button class="layer-btn active" data-layer="satellites">
+                <span class="layer-icon">&#9673;</span>
+                <span class="layer-name">Satellites</span>
+                <span class="layer-status"></span>
+            </button>
+            <button class="layer-btn active" data-layer="earthquakes">
+                <span class="layer-icon">&#9672;</span>
+                <span class="layer-name">Earthquakes</span>
+                <span class="layer-status"></span>
+            </button>
+            <button class="layer-btn active" data-layer="weather">
+                <span class="layer-icon">&#9928;</span>
+                <span class="layer-name">Weather</span>
+                <span class="layer-status"></span>
+            </button>
+            <button class="layer-btn active" data-layer="cameras">
+                <span class="layer-icon">&#9678;</span>
+                <span class="layer-name">Cameras</span>
+                <span class="layer-status"></span>
+            </button>
+        </div>
+
+        <!-- Bottom Left: Shader Modes -->
+        <div id="hud-shaders">
+            <div class="shader-title">RENDER MODE</div>
+            <div class="shader-buttons">
+                <button class="shader-btn active" data-shader="normal">NORMAL</button>
+                <button class="shader-btn" data-shader="nvg">NVG</button>
+                <button class="shader-btn" data-shader="flir">FLIR</button>
+                <button class="shader-btn" data-shader="crt">CRT</button>
+            </div>
+        </div>
+
+        <!-- Bottom Right: Info Panel -->
+        <div id="hud-info">
+            <div class="info-title">SYSTEM STATUS</div>
+            <div class="info-content" id="info-content">
+                <div class="info-row"><span class="info-key">STATUS</span><span class="info-val" id="status-text">INITIALIZING...</span></div>
+                <div class="info-row"><span class="info-key">TIME</span><span class="info-val" id="utc-time">--:--:--Z</span></div>
+                <div class="info-row"><span class="info-key">LAT</span><span class="info-val" id="cam-lat">--</span></div>
+                <div class="info-row"><span class="info-key">LON</span><span class="info-val" id="cam-lon">--</span></div>
+                <div class="info-row"><span class="info-key">ALT</span><span class="info-val" id="cam-alt">--</span></div>
+            </div>
+        </div>
+
+        <!-- Entity Info Popup -->
+        <div id="entity-popup" class="hidden">
+            <div class="popup-header">
+                <span class="popup-title" id="popup-title">--</span>
+                <button class="popup-close" id="popup-close">&#10005;</button>
+            </div>
+            <div class="popup-body" id="popup-body"></div>
+        </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <div class="loading-content">
+            <div class="loading-logo">&#9670; WORLDVIEW</div>
+            <div class="loading-bar">
+                <div class="loading-progress" id="loading-progress"></div>
+            </div>
+            <div class="loading-text" id="loading-text">Initializing systems...</div>
+        </div>
+    </div>
+
+    <!-- App Scripts -->
+    <script src="js/shaders.js"></script>
+    <script src="js/globe.js"></script>
+    <script src="js/hud.js"></script>
+    <script src="js/flights.js"></script>
+    <script src="js/satellites.js"></script>
+    <script src="js/earthquakes.js"></script>
+    <script src="js/weather.js"></script>
+    <script src="js/cameras.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
