@@ -19,10 +19,10 @@
         // Google Maps (Map Tiles API) — https://console.cloud.google.com
         googleMapsApiKey: 'YOUR_GOOGLE_MAPS_API_KEY',
 
-        // OpenSky Network (Basic Auth for higher rate limits)
-        // https://opensky-network.org/
-        openskyUsername: 'YOUR_OPENSKY_USERNAME',
-        openskyPassword: 'YOUR_OPENSKY_PASSWORD',
+        // OpenSky Network (OAuth2 Client Credentials for higher rate limits)
+        // https://opensky-network.org/ — register at opensky-network.org/login
+        openskyClientId: 'YOUR_OPENSKY_CLIENT_ID',
+        openskyClientSecret: 'YOUR_OPENSKY_CLIENT_SECRET',
 
         // ADSB.fi — free, no auth required. Set false to disable.
         adsbfiEnabled: true,
@@ -68,8 +68,8 @@
         const configKeys = [
             ['cesiumIonToken', 'Cesium Ion'],
             ['googleMapsApiKey', 'Google Maps'],
-            ['openskyUsername', 'OpenSky (user)'],
-            ['openskyPassword', 'OpenSky (pass)'],
+            ['openskyClientId', 'OpenSky (Client ID)'],
+            ['openskyClientSecret', 'OpenSky (Client Secret)'],
             ['adsbfiEnabled', 'ADSB.fi'],
             ['adsbExchangeApiKey', 'ADS-B Exchange'],
             ['windyWebcamApiKey', 'Windy Webcams'],
@@ -253,6 +253,17 @@
                 console.warn('  2. Enable \"Map Tiles API\"');
                 console.warn('  3. Create API key under Credentials');
                 console.warn('  4. Paste in js/app.js \u2192 CONFIG.googleMapsApiKey\n');
+            }
+
+            if (!isConfigured('openskyClientId') || !isConfigured('openskyClientSecret')) {
+                console.warn(
+                    '\n%c[CONFIG] OpenSky OAuth2 credentials not set!',
+                    'color: #ffaa00; font-size: 14px; font-weight: bold'
+                );
+                console.warn('  1. Register at: https://opensky-network.org/login');
+                console.warn('  2. Get OAuth2 client credentials');
+                console.warn('  3. Set OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET env vars on the server');
+                console.warn('  4. Or paste in js/app.js \u2192 CONFIG.openskyClientId / openskyClientSecret\n');
             }
 
         } catch (err) {

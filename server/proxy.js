@@ -10,6 +10,107 @@ const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...ar
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// =============================================
+// FIX 1: OpenSky OAuth2 Token Manager
+// Single shared instance — docs explicitly warn
+// against instantiating per-call.
+// Token endpoint: OpenID Connect client_credentials
+// Token lifetime: 30 min (1800s), refresh 30s before
+// =============================================
+
+class OpenSkyTokenManager {
+    constructor() {
+        this.accessToken = null;
+        this.tokenExpiry = 0; // epoch ms
+        this.refreshPromise = null;
+        this.TOKEN_REFRESH_MARGIN = 30; // seconds before expiry to refresh
+        this.TOKEN_URL = 'https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token';
+    }
+
+    /**
+     * Returns a valid Bearer token, refreshing if needed.
+     * Returns null if credentials are not configured.
+     */
+    async getToken() {
+        const clientId = process.env.OPENSKY_CLIENT_ID || '';
+        const clientSecret = process.env.OPENSKY_CLIENT_SECRET || '';
+
+        if (!clientId || clientId.startsWith('YOUR_') || !clientSecret || clientSecret.startsWith('YOUR_')) {
+            return null; // No credentials — anonymous mode
+        }
+
+        const now = Date.now();
+        // If token is still valid (with margin), return it
+        if (this.accessToken && now < this.tokenExpiry - (this.TOKEN_REFRESH_MARGIN * 1000)) {
+            return this.accessToken;
+        }
+
+        // Prevent multiple concurrent refreshes
+        if (this.refreshPromise) {
+            return this.refreshPromise;
+        }
+
+        this.refreshPromise = this._fetchToken(clientId, clientSecret);
+        try {
+            const token = await this.refreshPromise;
+            return token;
+        } finally {
+            this.refreshPromise = null;
+        }
+    }
+
+    async _fetchToken(clientId, clientSecret) {
+        try {
+            console.log('[TokenManager] Requesting new OAuth2 token...');
+            const params = new URLSearchParams({
+                grant_type: 'client_credentials',
+                client_id: clientId,
+                client_secret: clientSecret
+            });
+
+            const response = await fetch(this.TOKEN_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params.toString(),
+                timeout: 10000
+            });
+
+            if (!response.ok) {
+                const errText = await response.text().catch(() => '');
+                console.error(`[TokenManager] Token request failed: ${response.status} — ${errText}`);
+                this.accessToken = null;
+                this.tokenExpiry = 0;
+                return null;
+            }
+
+            const data = await response.json();
+            this.accessToken = data.access_token;
+            // expires_in is in seconds — typically 1800 (30 min)
+            const expiresIn = data.expires_in || 1800;
+            this.tokenExpiry = Date.now() + (expiresIn * 1000);
+            console.log(`[TokenManager] Token acquired, expires in ${expiresIn}s`);
+            return this.accessToken;
+        } catch (err) {
+            console.error('[TokenManager] Token fetch error:', err.message);
+            this.accessToken = null;
+            this.tokenExpiry = 0;
+            return null;
+        }
+    }
+
+    /**
+     * Force invalidate the current token (e.g. on 401 response).
+     */
+    invalidate() {
+        console.log('[TokenManager] Token invalidated');
+        this.accessToken = null;
+        this.tokenExpiry = 0;
+    }
+}
+
+// Single shared instance
+const openSkyTokenManager = new OpenSkyTokenManager();
+
 // --- Static files ---
 app.use(express.static(path.join(__dirname, '..')));
 
@@ -72,23 +173,95 @@ app.use(express.json());
 
 // --- API Routes ---
 
-// OpenSky Network (supports optional bbox query params forwarded verbatim)
-app.get('/api/opensky', (req, res) => {
+// ── OpenSky Network (OAuth2 Bearer Token + rate-limit header forwarding) ──
+// FIX 1: Uses OAuth2 client_credentials flow instead of Basic Auth.
+//         On 401, invalidates token and retries once.
+//         Forwards X-Rate-Limit-* headers to the client for credit tracking.
+app.get('/api/opensky', async (req, res) => {
     const qs = new URLSearchParams(req.query).toString();
-    const url = qs
-        ? `https://opensky-network.org/api/states/all?${qs}`
-        : 'https://opensky-network.org/api/states/all';
+    // FIX 1: Append &extended=1 to get category field (index 17)
+    const extendedParam = qs ? `${qs}&extended=1` : 'extended=1';
+    const url = `https://opensky-network.org/api/states/all?${extendedParam}`;
 
-    // Forward Basic Auth header if present (flights.js sends it)
-    const headers = {};
-    if (req.headers.authorization) {
-        headers['Authorization'] = req.headers.authorization;
+    async function makeRequest(isRetry) {
+        const headers = {};
+        const token = await openSkyTokenManager.getToken();
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        try {
+            const response = await fetch(url, { headers, timeout: 15000 });
+
+            // Forward rate-limit headers to client for credit tracking (FIX 2)
+            const rateLimitRemaining = response.headers.get('x-rate-limit-remaining');
+            const rateLimitRetryAfter = response.headers.get('x-rate-limit-retry-after-seconds');
+            if (rateLimitRemaining != null) {
+                res.set('X-Rate-Limit-Remaining', rateLimitRemaining);
+            }
+            if (rateLimitRetryAfter != null) {
+                res.set('X-Rate-Limit-Retry-After-Seconds', rateLimitRetryAfter);
+            }
+
+            // 401 — token expired or invalid: invalidate and retry once
+            if (response.status === 401 && !isRetry) {
+                console.warn('[Proxy] OpenSky 401 — invalidating token and retrying...');
+                openSkyTokenManager.invalidate();
+                return makeRequest(true);
+            }
+
+            // 429 — rate limited: forward the retry-after info
+            if (response.status === 429) {
+                console.warn('[Proxy] OpenSky 429 — rate limited');
+                const retryBody = { error: 'Rate limited', status: 429 };
+                if (rateLimitRetryAfter) retryBody.retryAfterSeconds = parseInt(rateLimitRetryAfter, 10);
+                return res.status(429).json(retryBody);
+            }
+
+            if (!response.ok) {
+                console.warn(`[Proxy] OpenSky returned ${response.status}`);
+                return res.status(response.status).json({ error: `OpenSky returned ${response.status}` });
+            }
+
+            const data = await response.json();
+            // Include auth mode info for client-side source display
+            data._authMode = token ? 'OAuth2' : 'Anonymous';
+            res.json(data);
+        } catch (err) {
+            console.error('[Proxy] OpenSky fetch error:', err.message);
+            res.status(502).json({ error: 'OpenSky proxy error', message: err.message });
+        }
     }
 
-    proxyRequest(url, req, res, { headers });
+    await makeRequest(false);
 });
 
-// ADS-B Exchange (adsb.lol) \u2013 free community fallback
+// ── FIX 3: ADSB.fi CORS Proxy ──────────────────────────────────────────────
+// ADSB.fi is free and requires no auth, but browser direct calls fail due to
+// CORS. This route proxies requests to avoid that.
+app.get('/api/adsbfi', (req, res) => {
+    const lat = parseFloat(req.query.lat) || 0;
+    const lon = parseFloat(req.query.lon) || 0;
+    const radius = parseInt(req.query.radius, 10) || 250;
+    const bounds = req.query.bounds || '';
+
+    let url;
+    if (bounds) {
+        // bounds format: south,north,west,east
+        url = `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${radius}`;
+        // ADSB.fi v2 uses lat/lon/dist format
+    }
+    // Default: lat/lon/dist based query
+    url = `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${radius}`;
+
+    proxyRequest(url, req, res, {
+        headers: {
+            'Accept': 'application/json'
+        }
+    });
+});
+
+// ADS-B Exchange (adsb.lol) – free community fallback
 app.get('/api/adsb', (req, res) => {
     const lat  = parseFloat(req.query.lat)  || 0;
     const lon  = parseFloat(req.query.lon)  || 0;
@@ -97,7 +270,7 @@ app.get('/api/adsb', (req, res) => {
     proxyRequest(url, req, res);
 });
 
-// ADS-B Exchange (RapidAPI) \u2013 uses API key from CONFIG
+// ADS-B Exchange (RapidAPI) – uses API key from CONFIG
 app.get('/api/adsbx', (req, res) => {
     const lat  = parseFloat(req.query.lat)  || 0;
     const lon  = parseFloat(req.query.lon)  || 0;
@@ -174,7 +347,7 @@ app.post('/api/overpass', (req, res) => {
     fetchOverpass();
 });
 
-// \u2500\u2500 Windy Webcams API (proxied \u2014 attaches API key) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// ── Windy Webcams API (proxied — attaches API key) ────────────────────────
 
 app.get('/api/windy-webcams', (req, res) => {
     const apiKey = process.env.WINDY_WEBCAM_API_KEY || '';
@@ -194,7 +367,7 @@ app.get('/api/windy-webcams', (req, res) => {
     });
 });
 
-// \u2500\u2500 MJPEG / HLS Stream Proxy \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// ── MJPEG / HLS Stream Proxy ────────────────────────────────────────────────
 //
 // Proxies a remote MJPEG or HLS stream through the server to avoid
 // CORS issues in the browser. The client passes ?url=<encoded-stream-url>.
@@ -206,7 +379,7 @@ app.get('/api/proxy-stream', async (req, res) => {
         return res.status(400).json({ error: 'Missing url parameter' });
     }
 
-    // Validate URL \u2014 only allow http/https
+    // Validate URL — only allow http/https
     let parsed;
     try {
         parsed = new URL(targetUrl);
@@ -277,7 +450,8 @@ app.listen(PORT, () => {
     console.log(`  Running on http://localhost:${PORT}`);
     console.log('========================================\n');
     console.log('API Endpoints:');
-    console.log(`  GET  /api/opensky         -> OpenSky Network (bbox + auth supported)`);
+    console.log(`  GET  /api/opensky         -> OpenSky Network (OAuth2 Bearer + extended=1)`);
+    console.log(`  GET  /api/adsbfi          -> ADSB.fi (CORS proxy, no auth)`);
     console.log(`  GET  /api/adsb            -> ADS-B (adsb.lol fallback)`);
     console.log(`  GET  /api/adsbx           -> ADS-B Exchange (RapidAPI, key required)`);
     console.log(`  GET  /api/tle/:group      -> CelesTrak TLE`);

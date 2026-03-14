@@ -880,6 +880,206 @@ html, body {
 }
 
 /* =============================================
+   FIX 4: Aircraft Category Filter Panel
+   ============================================= */
+
+#hud-aircraft-filters {
+    position: absolute;
+    top: 90px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: var(--bg-panel);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--border-glow);
+    border-radius: 4px;
+    padding: 12px;
+    min-width: 160px;
+    transition: opacity var(--transition-med);
+}
+
+#hud-aircraft-filters.hidden {
+    display: none;
+}
+
+.ac-filter-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    user-select: none;
+}
+
+.ac-filter-item:hover {
+    background: rgba(0, 240, 255, 0.05);
+}
+
+.ac-filter-item input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border: 1px solid var(--border-glow-strong);
+    border-radius: 2px;
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.ac-filter-item input[type="checkbox"]:checked {
+    background: rgba(0, 240, 255, 0.2);
+    border-color: var(--accent-cyan);
+}
+
+.ac-filter-item input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    top: 1px;
+    left: 3px;
+    width: 4px;
+    height: 7px;
+    border: 1.5px solid var(--accent-cyan);
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg);
+}
+
+.ac-filter-color {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 4px currentColor;
+}
+
+.ac-filter-name {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-secondary);
+    flex: 1;
+    letter-spacing: 0.5px;
+}
+
+.ac-filter-count {
+    font-family: var(--font-hud);
+    font-size: 13px;
+    color: var(--text-dim);
+    min-width: 24px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* =============================================
+   FIX 2: Refresh Controls Panel
+   ============================================= */
+
+#hud-refresh-controls {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-panel);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--border-glow);
+    border-radius: 4px;
+    padding: 10px 14px;
+    min-width: 260px;
+}
+
+.refresh-title {
+    font-family: var(--font-hud);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 3px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-glow);
+}
+
+.refresh-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 13px;
+}
+
+.refresh-label {
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+}
+
+.refresh-val {
+    font-family: var(--font-hud);
+    font-size: 13px;
+    color: var(--accent-cyan);
+    text-shadow: 0 0 6px rgba(0, 240, 255, 0.3);
+    font-variant-numeric: tabular-nums;
+}
+
+.refresh-select {
+    background: rgba(0, 240, 255, 0.05);
+    border: 1px solid var(--border-glow);
+    border-radius: 3px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 3px 6px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--transition-fast);
+}
+
+.refresh-select:focus {
+    border-color: var(--accent-cyan);
+}
+
+.refresh-select option {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+}
+
+.refresh-btn {
+    background: rgba(0, 240, 255, 0.08);
+    border: 1px solid var(--border-glow);
+    border-radius: 3px;
+    color: var(--accent-cyan);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 8px;
+    line-height: 1;
+    transition: all var(--transition-fast);
+}
+
+.refresh-btn:hover {
+    background: rgba(0, 240, 255, 0.15);
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.2);
+}
+
+.refresh-divider {
+    height: 1px;
+    background: var(--border-glow);
+    margin: 6px 0;
+}
+
+.credit-info {
+    margin-top: 2px;
+}
+
+/* =============================================
    FIX 6: Satellite Category Filter Panel
    ============================================= */
 
@@ -989,6 +1189,12 @@ html, body {
 
 @media (max-width: 768px) {
     #hud-sat-filters {
+        display: none !important;
+    }
+    #hud-aircraft-filters {
+        display: none !important;
+    }
+    #hud-refresh-controls {
         display: none !important;
     }
 }

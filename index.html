@@ -98,6 +98,41 @@
             </button>
         </div>
 
+        <!-- FIX 4: Aircraft Category Filter Panel -->
+        <div id="hud-aircraft-filters">
+            <div class="filter-title">AIRCRAFT FILTERS</div>
+            <label class="ac-filter-item">
+                <input type="checkbox" data-ac-cat="military" checked>
+                <span class="ac-filter-color" style="background:#ff3344"></span>
+                <span class="ac-filter-name">Military</span>
+                <span class="ac-filter-count" id="ac-count-military">0</span>
+            </label>
+            <label class="ac-filter-item">
+                <input type="checkbox" data-ac-cat="high-perf" checked>
+                <span class="ac-filter-color" style="background:#ff3344"></span>
+                <span class="ac-filter-name">High Perf</span>
+                <span class="ac-filter-count" id="ac-count-high-perf">0</span>
+            </label>
+            <label class="ac-filter-item">
+                <input type="checkbox" data-ac-cat="rotorcraft" checked>
+                <span class="ac-filter-color" style="background:#ff8800"></span>
+                <span class="ac-filter-name">Rotorcraft</span>
+                <span class="ac-filter-count" id="ac-count-rotorcraft">0</span>
+            </label>
+            <label class="ac-filter-item">
+                <input type="checkbox" data-ac-cat="uav" checked>
+                <span class="ac-filter-color" style="background:#ffdd00"></span>
+                <span class="ac-filter-name">UAV/Drone</span>
+                <span class="ac-filter-count" id="ac-count-uav">0</span>
+            </label>
+            <label class="ac-filter-item">
+                <input type="checkbox" data-ac-cat="civilian" checked>
+                <span class="ac-filter-color" style="background:#00d4ff"></span>
+                <span class="ac-filter-name">Civilian</span>
+                <span class="ac-filter-count" id="ac-count-civilian">0</span>
+            </label>
+        </div>
+
         <!-- FIX 6: Satellite Category Filter Panel -->
         <div id="hud-sat-filters">
             <div class="filter-title">SATELLITE FILTERS</div>
@@ -157,6 +192,51 @@
             <button id="labels-toggle" class="labels-toggle-btn active">EN LABELS</button>
         </div>
 
+        <!-- FIX 2: Refresh Controls Panel -->
+        <div id="hud-refresh-controls">
+            <div class="refresh-title">REFRESH CONTROLS</div>
+            <div class="refresh-row">
+                <span class="refresh-label">&#9992; Aircraft</span>
+                <select id="aircraft-refresh-select" class="refresh-select">
+                    <option value="auto">Auto</option>
+                    <option value="5000">5s</option>
+                    <option value="10000">10s</option>
+                    <option value="15000">15s</option>
+                    <option value="30000">30s</option>
+                    <option value="60000">60s</option>
+                </select>
+                <button id="aircraft-refresh-btn" class="refresh-btn" title="Refresh now">&#8635;</button>
+            </div>
+            <div class="refresh-row">
+                <span class="refresh-label">&#9673; Satellites</span>
+                <select id="satellite-refresh-select" class="refresh-select">
+                    <option value="auto">Auto (1s)</option>
+                    <option value="1000">1s</option>
+                    <option value="2000">2s</option>
+                    <option value="5000">5s</option>
+                </select>
+            </div>
+            <div class="refresh-divider"></div>
+            <div class="refresh-row">
+                <span class="refresh-label">Poll</span>
+                <span class="refresh-val" id="aircraft-poll-interval">--</span>
+            </div>
+            <div class="credit-info">
+                <div class="refresh-row">
+                    <span class="refresh-label">Credit/call</span>
+                    <span class="refresh-val" id="opensky-credit-cost">--</span>
+                </div>
+                <div class="refresh-row">
+                    <span class="refresh-label">Remaining</span>
+                    <span class="refresh-val" id="opensky-credits-remaining">--</span>
+                </div>
+                <div class="refresh-row">
+                    <span class="refresh-label">Used (session)</span>
+                    <span class="refresh-val" id="opensky-credits-used">0</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Bottom Right: Info Panel -->
         <div id="hud-info">
             <div class="info-title">SYSTEM STATUS</div>
@@ -168,6 +248,7 @@
                 <div class="info-row"><span class="info-key">LAT</span><span class="info-val" id="cam-lat">--</span></div>
                 <div class="info-row"><span class="info-key">LON</span><span class="info-val" id="cam-lon">--</span></div>
                 <div class="info-row"><span class="info-key">ALT</span><span class="info-val" id="cam-alt">--</span></div>
+                <div class="info-row"><span class="info-key">SOURCE</span><span class="info-val" id="flight-source-status">--</span></div>
             </div>
         </div>
 
