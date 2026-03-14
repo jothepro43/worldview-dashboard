@@ -1,5 +1,6 @@
 /* ========================================
-   WorldView - Aircraft Tracking (OpenSky Network)
+   WorldView - Aircraft Tracking
+   Multi-API Waterfall: OpenSky → ADSB.fi → ADS-B Exchange
    ======================================== */
 
 const WorldViewFlights = (() => {
@@ -12,20 +13,22 @@ const WorldViewFlights = (() => {
     let pollInterval = null;
     let visible = true;
 
-    // ── Rate-limiting state ─────────────────────────────────────────────────
+    // ── Active source tracking for HUD ──────────────────────────────────────
+    let activeSource = 'INITIALIZING';
+
+    // ── Rate-limiting state (OpenSky) ─────────────────────────────────────
     let requestsThisMinute = 0;
     let minuteStartTime = Date.now();
     let consecutiveFailures = 0;
     let backoffUntil = 0;
     let isRateLimited = false;
 
-    // ── Interpolation state ─────────────────────────────────────────────────
-    // icao24 -> { lat, lon, alt, velocity, heading, timestamp }
+    // ── Interpolation state ─────────────────────────────────────────────
     let aircraftPositions = new Map();
     let interpolationFrameId = null;
     let lastInterpolationTime = 0;
+    let isInterpolating = false;
 
-    // Military callsign prefixes
     const MILITARY_PREFIXES = [
         'RCH', 'DUKE', 'EVAC', 'REACH', 'KING', 'PEDRO', 'JOLLY',
         'KNIFE', 'TOPCAT', 'VADER', 'DOOM', 'VIPER', 'HAWK', 'EAGLE',
@@ -43,7 +46,26 @@ const WorldViewFlights = (() => {
         return MILITARY_PREFIXES.some(prefix => cs.startsWith(prefix));
     }
 
-    // Create airplane icon as a data URL canvas
+    function getConfig() {
+        return (typeof window !== 'undefined' && window.WorldViewConfig) ? window.WorldViewConfig : {};
+    }
+
+    function isConfigured(key) {
+        const cfg = getConfig();
+        const val = cfg[key];
+        if (val === undefined || val === null || val === false) return false;
+        if (typeof val === 'string' && val.startsWith('YOUR_')) return false;
+        if (typeof val === 'string' && val.trim() === '') return false;
+        return true;
+    }
+
+    function setFlightSource(source) {
+        activeSource = source;
+        console.log(`[Flights] Source: ${source}`);
+        const el = document.getElementById('flight-source-status');
+        if (el) el.textContent = source;
+    }
+
     function createAircraftIcon(color, size) {
         const canvas = document.createElement('canvas');
         canvas.width = size;
@@ -52,42 +74,31 @@ const WorldViewFlights = (() => {
         const cx = size / 2;
         const cy = size / 2;
         const s = size * 0.4;
-
         ctx.save();
         ctx.translate(cx, cy);
-
-        // Aircraft shape (simplified top-down)
         ctx.beginPath();
-        // Fuselage
         ctx.moveTo(0, -s);
         ctx.lineTo(s * 0.15, -s * 0.4);
-        // Right wing
         ctx.lineTo(s * 0.8, -s * 0.1);
         ctx.lineTo(s * 0.8, s * 0.1);
         ctx.lineTo(s * 0.15, 0);
-        // Right tail
         ctx.lineTo(s * 0.35, s * 0.7);
         ctx.lineTo(s * 0.35, s * 0.85);
         ctx.lineTo(s * 0.1, s * 0.6);
-        // Bottom
         ctx.lineTo(0, s * 0.7);
-        // Left tail
         ctx.lineTo(-s * 0.1, s * 0.6);
         ctx.lineTo(-s * 0.35, s * 0.85);
         ctx.lineTo(-s * 0.35, s * 0.7);
         ctx.lineTo(-s * 0.15, 0);
-        // Left wing
         ctx.lineTo(-s * 0.8, s * 0.1);
         ctx.lineTo(-s * 0.8, -s * 0.1);
         ctx.lineTo(-s * 0.15, -s * 0.4);
         ctx.closePath();
-
         ctx.fillStyle = color;
         ctx.fill();
         ctx.strokeStyle = 'rgba(0,0,0,0.3)';
         ctx.lineWidth = 0.5;
         ctx.stroke();
-
         ctx.restore();
         return canvas.toDataURL();
     }
@@ -95,15 +106,8 @@ const WorldViewFlights = (() => {
     let civilianIcon = null;
     let militaryIcon = null;
 
-    // ── Rate-limit helpers ──────────────────────────────────────────────────
-
-    /**
-     * Refresh the per-minute request counter window and return whether
-     * we are currently over the 8-requests-per-minute limit.
-     */
     function checkRateLimit() {
         const now = Date.now();
-        // Roll the window if a minute has passed
         if (now - minuteStartTime >= 60000) {
             requestsThisMinute = 0;
             minuteStartTime = now;
@@ -111,21 +115,14 @@ const WorldViewFlights = (() => {
         return requestsThisMinute >= 8;
     }
 
-    function recordRequest() {
-        requestsThisMinute++;
-    }
+    function recordRequest() { requestsThisMinute++; }
 
-    /**
-     * Return the delay in ms we must still wait due to exponential backoff,
-     * or 0 if we can proceed.
-     */
     function getBackoffDelay() {
         const remaining = backoffUntil - Date.now();
         return remaining > 0 ? remaining : 0;
     }
 
     function applyBackoff() {
-        // Base 10 s, doubles each failure, max 80 s
         const BASE = 10000;
         const MAX = 80000;
         consecutiveFailures++;
@@ -134,231 +131,249 @@ const WorldViewFlights = (() => {
         console.warn(`[Flights] Backoff: waiting ${delay / 1000}s (failure #${consecutiveFailures})`);
     }
 
-    function resetBackoff() {
-        consecutiveFailures = 0;
-        backoffUntil = 0;
+    function resetBackoff() { consecutiveFailures = 0; backoffUntil = 0; }
+
+    function getCameraAltitude() {
+        try {
+            if (typeof WorldViewGlobe !== 'undefined' && WorldViewGlobe.getCameraPosition) {
+                const pos = WorldViewGlobe.getCameraPosition();
+                return pos ? pos.alt : Infinity;
+            }
+        } catch (e) { /* ignore */ }
+        return Infinity;
     }
 
-    // ── ADS-B Exchange fallback ─────────────────────────────────────────────
-
-    async function fetchFromADSB() {
+    function getViewportBbox() {
         try {
-            let camPos = null;
+            if (typeof WorldViewGlobe !== 'undefined' && WorldViewGlobe.getViewportBounds) {
+                return WorldViewGlobe.getViewportBounds();
+            }
+        } catch (e) { /* ignore */ }
+        return null;
+    }
+
+    function getCameraCenter() {
+        try {
             if (typeof WorldViewGlobe !== 'undefined' && WorldViewGlobe.getCameraPosition) {
-                camPos = WorldViewGlobe.getCameraPosition();
+                const pos = WorldViewGlobe.getCameraPosition();
+                if (pos && pos.lat != null && pos.lon != null) return pos;
             }
-            const lat = (camPos && camPos.lat != null) ? camPos.lat : 0;
-            const lon = (camPos && camPos.lon != null) ? camPos.lon : 0;
+        } catch (e) { /* ignore */ }
+        return { lat: 0, lon: 0, alt: Infinity };
+    }
 
-            const url = `/api/adsb?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&dist=250`;
-            console.log('[Flights] Trying ADS-B Exchange fallback:', url);
+    function getPollIntervalMs() {
+        const alt = getCameraAltitude();
+        return (alt != null && alt < 3000000) ? 10000 : 30000;
+    }
 
-            const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    function buildOpenSkyUrl() {
+        const alt = getCameraAltitude();
+        const useViewport = (alt != null && alt < 3000000);
+        let bbox = null;
+        if (useViewport) { bbox = getViewportBbox(); }
+        if (bbox) {
+            const { south, north, west, east } = bbox;
+            return `/api/opensky?lamin=${south.toFixed(4)}&lomin=${west.toFixed(4)}&lamax=${north.toFixed(4)}&lomax=${east.toFixed(4)}`;
+        }
+        return '/api/opensky';
+    }
+
+    async function fetchFromOpenSky() {
+        const url = buildOpenSkyUrl();
+        console.log('[Flights] OpenSky request:', url);
+        const headers = {};
+        if (isConfigured('openskyUsername') && isConfigured('openskyPassword')) {
+            const cfg = getConfig();
+            headers['Authorization'] = 'Basic ' + btoa(cfg.openskyUsername + ':' + cfg.openskyPassword);
+        }
+        recordRequest();
+        const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: headers });
+        if (response.status === 429) {
+            console.warn('[Flights] OpenSky 429 \u2014 rate limited');
+            applyBackoff();
+            isRateLimited = true;
+            return null;
+        }
+        if (!response.ok) {
+            console.warn('[Flights] OpenSky returned status:', response.status);
+            return null;
+        }
+        const data = await response.json();
+        if (!data || !data.states || data.states.length === 0) {
+            console.warn('[Flights] OpenSky returned no states');
+            return null;
+        }
+        const authLabel = (isConfigured('openskyUsername') && isConfigured('openskyPassword'))
+            ? 'OpenSky (Auth)' : 'OpenSky (Anon)';
+        console.log(`[Flights] ${authLabel}: ${data.states.length} aircraft`);
+        return { states: data.states, source: authLabel };
+    }
+
+    async function fetchFromADSBfi() {
+        const cfg = getConfig();
+        if (cfg.adsbfiEnabled === false) {
+            console.log('[Flights] ADSB.fi disabled in config');
+            return null;
+        }
+        try {
+            const bbox = getViewportBbox();
+            let url;
+            if (bbox) {
+                url = `https://api.adsb.fi/v1/flights?bounds=${bbox.south.toFixed(4)},${bbox.north.toFixed(4)},${bbox.west.toFixed(4)},${bbox.east.toFixed(4)}`;
+            } else {
+                const center = getCameraCenter();
+                url = `https://api.adsb.fi/v1/flights?lat=${center.lat.toFixed(4)}&lon=${center.lon.toFixed(4)}&radius=500`;
+            }
+            console.log('[Flights] ADSB.fi request:', url);
+            const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
             if (!response.ok) {
-                console.warn('[Flights] ADS-B fallback returned status:', response.status);
+                console.warn('[Flights] ADSB.fi returned status:', response.status);
                 return null;
             }
-
             const data = await response.json();
-            if (!data || !data.ac) {
-                console.warn('[Flights] ADS-B fallback: no aircraft data.');
+            const acArray = data.aircraft || data.ac;
+            if (!acArray || acArray.length === 0) {
+                console.warn('[Flights] ADSB.fi returned no aircraft');
                 return null;
             }
-
-            // Normalise ADS-B Exchange format → OpenSky-like rows
-            // OpenSky state vector indices used later:
-            // [0]=icao24, [1]=callsign, [2]=originCountry, [5]=lon, [6]=lat,
-            // [7]=baroAlt, [8]=onGround, [9]=velocity, [10]=trueTrack,
-            // [11]=verticalRate, [13]=geoAlt, [17]=category
-            const states = data.ac
-                .filter(ac => ac.lat != null && ac.lon != null)
-                .map(ac => {
-                    const altMeters = (ac.alt_baro != null && ac.alt_baro !== 'ground')
-                        ? parseFloat(ac.alt_baro) * 0.3048
-                        : null;
-                    const velocityMS = ac.gs != null ? parseFloat(ac.gs) * 0.514444 : null;
-                    const vertRateMS = ac.baro_rate != null ? parseFloat(ac.baro_rate) / 196.85 : null;
-                    const onGround = ac.alt_baro === 'ground';
-
-                    // Build a sparse array matching OpenSky indices
-                    const row = new Array(18).fill(null);
-                    row[0] = ac.hex || '';
-                    row[1] = ac.flight ? ac.flight.trim() : '';
-                    row[2] = '';        // no country from ADS-B Exchange
-                    row[5] = parseFloat(ac.lon);
-                    row[6] = parseFloat(ac.lat);
-                    row[7] = altMeters;
-                    row[8] = onGround;
-                    row[9] = velocityMS;
-                    row[10] = ac.track != null ? parseFloat(ac.track) : null;
-                    row[11] = vertRateMS;
-                    row[13] = altMeters; // use baro alt as geo alt too
-                    row[17] = null;
-                    return row;
-                });
-
-            console.log(`[Flights] ADS-B fallback: ${states.length} aircraft received.`);
-            return states;
+            const states = normalizeADSBData(acArray);
+            console.log(`[Flights] ADSB.fi: ${states.length} aircraft`);
+            return { states, source: 'Fallback: ADSB.fi' };
         } catch (err) {
-            console.error('[Flights] ADS-B fallback error:', err);
+            console.error('[Flights] ADSB.fi error:', err.message);
             return null;
         }
     }
 
-    // ── Viewport helpers ────────────────────────────────────────────────────
-
-    function buildOpenSkyUrl() {
-        let bbox = null;
-        let useGlobal = true;
-
+    async function fetchFromADSBExchange() {
+        if (!isConfigured('adsbExchangeApiKey')) {
+            console.log('[Flights] ADS-B Exchange API key not configured');
+            return null;
+        }
         try {
-            if (typeof WorldViewGlobe !== 'undefined') {
-                const camPos = WorldViewGlobe.getCameraPosition ? WorldViewGlobe.getCameraPosition() : null;
-                const alt = camPos ? camPos.alt : Infinity;
-
-                if (alt != null && alt < 5000000) {
-                    bbox = WorldViewGlobe.getViewportBounds ? WorldViewGlobe.getViewportBounds() : null;
-                    if (bbox) useGlobal = false;
-                }
+            const center = getCameraCenter();
+            const lat = center.lat.toFixed(4);
+            const lon = center.lon.toFixed(4);
+            const url = `/api/adsbx?lat=${lat}&lon=${lon}&dist=250`;
+            console.log('[Flights] ADS-B Exchange request:', url);
+            const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
+            if (!response.ok) {
+                console.warn('[Flights] ADS-B Exchange returned status:', response.status);
+                return null;
             }
-        } catch (e) {
-            // Fall back to global if anything goes wrong
+            const data = await response.json();
+            const acArray = data.ac || data.aircraft;
+            if (!acArray || acArray.length === 0) {
+                console.warn('[Flights] ADS-B Exchange returned no aircraft');
+                return null;
+            }
+            const states = normalizeADSBData(acArray);
+            console.log(`[Flights] ADS-B Exchange: ${states.length} aircraft`);
+            return { states, source: 'Fallback: ADS-B Exchange' };
+        } catch (err) {
+            console.error('[Flights] ADS-B Exchange error:', err.message);
+            return null;
         }
-
-        if (useGlobal || !bbox) {
-            return '/api/opensky';
-        }
-
-        const { south, north, west, east } = bbox;
-        return `/api/opensky?lamin=${south.toFixed(4)}&lomin=${west.toFixed(4)}&lamax=${north.toFixed(4)}&lomax=${east.toFixed(4)}`;
     }
 
-    // ── Main fetch ──────────────────────────────────────────────────────────
+    function normalizeADSBData(acArray) {
+        return acArray
+            .filter(ac => ac.lat != null && ac.lon != null)
+            .map(ac => {
+                const altMeters = (ac.alt_baro != null && ac.alt_baro !== 'ground')
+                    ? parseFloat(ac.alt_baro) * 0.3048 : null;
+                const velocityMS = ac.gs != null ? parseFloat(ac.gs) * 0.514444 : null;
+                const vertRateMS = ac.baro_rate != null ? parseFloat(ac.baro_rate) / 196.85 : null;
+                const onGround = ac.alt_baro === 'ground';
+                const row = new Array(18).fill(null);
+                row[0] = ac.hex || ac.icao || '';
+                row[1] = ac.flight ? ac.flight.trim() : '';
+                row[2] = '';
+                row[5] = parseFloat(ac.lon);
+                row[6] = parseFloat(ac.lat);
+                row[7] = altMeters;
+                row[8] = onGround;
+                row[9] = velocityMS;
+                row[10] = ac.track != null ? parseFloat(ac.track) : null;
+                row[11] = vertRateMS;
+                row[13] = altMeters;
+                row[17] = null;
+                return row;
+            });
+    }
 
     async function fetchAircraft() {
         if (!visible) return;
-
-        // Check backoff
         const backoffRemaining = getBackoffDelay();
         if (backoffRemaining > 0) {
-            console.log(`[Flights] In backoff, skipping fetch. Retry in ${Math.ceil(backoffRemaining / 1000)}s.`);
+            console.log(`[Flights] In backoff, skipping OpenSky. Retry in ${Math.ceil(backoffRemaining / 1000)}s.`);
+            const fallbackResult = await tryFallbacks();
+            if (fallbackResult) { applyResult(fallbackResult); }
+            else { setFlightSource('Interpolating'); isInterpolating = true; }
             return;
         }
-
-        // Check rate limit
         if (checkRateLimit()) {
             if (!isRateLimited) {
                 isRateLimited = true;
-                console.warn('[Flights] Rate limit reached (8 req/min). Skipping fetch.');
-                if (typeof WorldViewHUD !== 'undefined' && WorldViewHUD.setStatus) {
-                    WorldViewHUD.setStatus('RATE LIMITED');
-                }
+                console.warn('[Flights] Rate limit reached (8 req/min). Trying fallbacks.');
             }
+            const fallbackResult = await tryFallbacks();
+            if (fallbackResult) { applyResult(fallbackResult); }
+            else { setFlightSource('Interpolating'); isInterpolating = true; }
             return;
         }
-
         try {
-            const url = buildOpenSkyUrl();
-            let response;
-
-            recordRequest();
-
-            try {
-                response = await fetch(url, { signal: AbortSignal.timeout(8000) });
-            } catch {
-                // Proxy unreachable – try direct OpenSky
-                const directUrl = 'https://opensky-network.org/api/states/all';
-                response = await fetch(directUrl, { signal: AbortSignal.timeout(15000) });
-                recordRequest();
-            }
-
-            // Handle 429 → exponential backoff + try ADS-B
-            if (response.status === 429) {
-                console.warn('[Flights] OpenSky 429 Too Many Requests. Applying backoff.');
-                applyBackoff();
-                isRateLimited = true;
-                if (typeof WorldViewHUD !== 'undefined' && WorldViewHUD.setStatus) {
-                    WorldViewHUD.setStatus('RATE LIMITED');
+            const openskyResult = await fetchFromOpenSky();
+            if (openskyResult) {
+                resetBackoff();
+                if (isRateLimited) {
+                    isRateLimited = false;
+                    if (typeof WorldViewHUD !== 'undefined' && WorldViewHUD.setStatus) {
+                        WorldViewHUD.setStatus('ONLINE');
+                    }
                 }
-                // Try ADS-B Exchange fallback
-                const fallbackStates = await fetchFromADSB();
-                if (fallbackStates && fallbackStates.length > 0) {
-                    aircraftData = fallbackStates;
-                    updatePositionStore(fallbackStates);
-                    renderAircraft();
-                    const count = fallbackStates.filter(s => s[6] != null && s[5] != null && !s[8]).length;
-                    WorldViewHUD.updateCounter('aircraft', count);
-                }
+                isInterpolating = false;
+                applyResult(openskyResult);
                 return;
             }
-
-            if (!response.ok) {
-                console.warn('[Flights] API returned status:', response.status);
-                applyBackoff();
-                // Try ADS-B Exchange fallback
-                const fallbackStates = await fetchFromADSB();
-                if (fallbackStates && fallbackStates.length > 0) {
-                    aircraftData = fallbackStates;
-                    updatePositionStore(fallbackStates);
-                    renderAircraft();
-                    const count = fallbackStates.filter(s => s[6] != null && s[5] != null && !s[8]).length;
-                    WorldViewHUD.updateCounter('aircraft', count);
-                }
-                return;
-            }
-
-            const data = await response.json();
-            if (!data || !data.states) {
-                console.warn('[Flights] No aircraft data received – trying ADS-B fallback.');
-                const fallbackStates = await fetchFromADSB();
-                if (fallbackStates && fallbackStates.length > 0) {
-                    aircraftData = fallbackStates;
-                    updatePositionStore(fallbackStates);
-                    renderAircraft();
-                    const count = fallbackStates.filter(s => s[6] != null && s[5] != null && !s[8]).length;
-                    WorldViewHUD.updateCounter('aircraft', count);
-                }
-                return;
-            }
-
-            // Success
-            resetBackoff();
-            if (isRateLimited) {
-                isRateLimited = false;
-                console.log('[Flights] Rate limit recovered.');
-                if (typeof WorldViewHUD !== 'undefined' && WorldViewHUD.setStatus) {
-                    WorldViewHUD.setStatus('ONLINE');
-                }
-            }
-
-            aircraftData = data.states;
-            updatePositionStore(data.states);
-            renderAircraft();
-
-            const count = aircraftData.filter(s => s[6] != null && s[5] != null && !s[8]).length;
-            WorldViewHUD.updateCounter('aircraft', count);
-            console.log(`[Flights] Updated: ${count} airborne aircraft.`);
-
-        } catch (err) {
-            console.error('[Flights] Error fetching aircraft data:', err);
+            console.log('[Flights] OpenSky failed, trying fallbacks...');
             applyBackoff();
-            // Try ADS-B Exchange fallback
-            const fallbackStates = await fetchFromADSB();
-            if (fallbackStates && fallbackStates.length > 0) {
-                aircraftData = fallbackStates;
-                updatePositionStore(fallbackStates);
-                renderAircraft();
-                const count = fallbackStates.filter(s => s[6] != null && s[5] != null && !s[8]).length;
-                WorldViewHUD.updateCounter('aircraft', count);
+            const fallbackResult = await tryFallbacks();
+            if (fallbackResult) {
+                isInterpolating = false;
+                applyResult(fallbackResult);
+                return;
             }
+            console.warn('[Flights] All sources failed. Interpolating existing data.');
+            setFlightSource('Interpolating');
+            isInterpolating = true;
+        } catch (err) {
+            console.error('[Flights] Error in fetch waterfall:', err);
+            applyBackoff();
+            setFlightSource('Interpolating');
+            isInterpolating = true;
         }
     }
 
-    // ── Position interpolation ──────────────────────────────────────────────
+    async function tryFallbacks() {
+        const adsbfiResult = await fetchFromADSBfi();
+        if (adsbfiResult) return adsbfiResult;
+        const adsbxResult = await fetchFromADSBExchange();
+        if (adsbxResult) return adsbxResult;
+        return null;
+    }
 
-    /**
-     * Store (or update) each aircraft's position info for interpolation.
-     */
+    function applyResult(result) {
+        aircraftData = result.states;
+        updatePositionStore(result.states);
+        renderAircraft();
+        setFlightSource(result.source);
+        const count = aircraftData.filter(s => s[6] != null && s[5] != null && !s[8]).length;
+        WorldViewHUD.updateCounter('aircraft', count);
+        console.log(`[Flights] Updated: ${count} airborne aircraft (${result.source}).`);
+    }
+
     function updatePositionStore(states) {
         const now = Date.now();
         states.forEach(state => {
@@ -366,14 +381,11 @@ const WorldViewFlights = (() => {
             const lon = state[5];
             const lat = state[6];
             const alt = state[13] || state[7] || 10000;
-            const velocity = state[9];  // m/s
-            const heading = state[10]; // degrees true
+            const velocity = state[9];
+            const heading = state[10];
             if (icao24 == null || lon == null || lat == null) return;
-
             aircraftPositions.set(icao24, {
-                lat,
-                lon,
-                alt,
+                lat, lon, alt,
                 velocity: velocity || 0,
                 heading: heading || 0,
                 timestamp: now
@@ -381,47 +393,31 @@ const WorldViewFlights = (() => {
         });
     }
 
-    /**
-     * Given a stored position record, advance it by dt seconds using
-     * dead-reckoning from velocity + heading.
-     */
     function interpolatePosition(rec, dtSeconds) {
         if (!rec || rec.velocity <= 0 || dtSeconds <= 0) {
             return { lat: rec.lat, lon: rec.lon, alt: rec.alt };
         }
         const headingRad = rec.heading * Math.PI / 180;
-        const v = rec.velocity; // m/s
+        const v = rec.velocity;
         const dt = dtSeconds;
-
-        const dx = v * Math.sin(headingRad) * dt; // metres east
-        const dy = v * Math.cos(headingRad) * dt; // metres north
-
+        const dx = v * Math.sin(headingRad) * dt;
+        const dy = v * Math.cos(headingRad) * dt;
         const latRad = rec.lat * Math.PI / 180;
         const newLat = rec.lat + (dy / 110540);
         const newLon = rec.lon + (dx / (111320 * Math.cos(latRad)));
-
         return { lat: newLat, lon: newLon, alt: rec.alt };
     }
 
-    /**
-     * Animation loop: re-render billboards every ~1 second using
-     * interpolated positions, without hitting the network.
-     */
     function startInterpolationLoop() {
-        if (interpolationFrameId !== null) return; // already running
-
+        if (interpolationFrameId !== null) return;
         function loop() {
             interpolationFrameId = requestAnimationFrame(loop);
-
             const now = Date.now();
-            if (now - lastInterpolationTime < 1000) return; // 1-second throttle
+            if (now - lastInterpolationTime < 1000) return;
             lastInterpolationTime = now;
-
             if (!visible || !billboardCollection || aircraftPositions.size === 0) return;
-
             renderAircraftInterpolated();
         }
-
         interpolationFrameId = requestAnimationFrame(loop);
     }
 
@@ -432,17 +428,11 @@ const WorldViewFlights = (() => {
         }
     }
 
-    /**
-     * Re-render using dead-reckoned positions (called every ~1s by the loop).
-     */
     function renderAircraftInterpolated() {
         if (!viewer || !billboardCollection) return;
-
         billboardCollection.removeAll();
         labelCollection.removeAll();
-
         const now = Date.now();
-
         aircraftData.forEach(state => {
             const icao24 = state[0];
             const callsign = state[1] ? state[1].trim() : '';
@@ -452,71 +442,43 @@ const WorldViewFlights = (() => {
             const trueTrack = state[10];
             const verticalRate = state[11];
             const category = state[17];
-
             if (onGround) return;
-
-            // Get stored position (may have been updated by fresh data)
             const rec = aircraftPositions.get(icao24);
             if (!rec || rec.lat == null || rec.lon == null) return;
-
-            // Interpolate forward from stored timestamp
             const dtSeconds = (now - rec.timestamp) / 1000;
             const interp = interpolatePosition(rec, dtSeconds);
-
             const altitude = interp.alt;
             const mil = isMilitary(callsign, category);
             const icon = mil ? militaryIcon : civilianIcon;
-
             const position = Cesium.Cartesian3.fromDegrees(interp.lon, interp.lat, altitude);
             const rotation = trueTrack != null ? -Cesium.Math.toRadians(trueTrack) : 0;
-
             billboardCollection.add({
-                position,
-                image: icon,
-                scale: mil ? 0.7 : 0.5,
-                rotation,
+                position, image: icon,
+                scale: mil ? 0.7 : 0.5, rotation,
                 alignedAxis: Cesium.Cartesian3.UNIT_Z,
                 verticalOrigin: Cesium.VerticalOrigin.CENTER,
                 horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
                 disableDepthTestDistance: 0,
-                id: {
-                    type: 'aircraft',
-                    icao24,
-                    callsign,
-                    originCountry,
-                    altitude,
-                    velocity,
-                    trueTrack,
-                    verticalRate,
-                    isMilitary: mil
-                }
+                id: { type: 'aircraft', icao24, callsign, originCountry, altitude, velocity, trueTrack, verticalRate, isMilitary: mil }
             });
-
             if (mil && callsign) {
                 labelCollection.add({
-                    position,
-                    text: callsign,
+                    position, text: callsign,
                     font: '10px Share Tech Mono',
                     fillColor: Cesium.Color.fromCssColorString('#ff3344'),
-                    outlineColor: Cesium.Color.BLACK,
-                    outlineWidth: 2,
+                    outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
                     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                     pixelOffset: new Cesium.Cartesian2(0, -20),
-                    disableDepthTestDistance: 0,
-                    scale: 1.0
+                    disableDepthTestDistance: 0, scale: 1.0
                 });
             }
         });
     }
 
-    // ── Initial render (snaps to real positions on new data) ────────────────
-
     function renderAircraft() {
         if (!viewer || !billboardCollection) return;
-
         billboardCollection.removeAll();
         labelCollection.removeAll();
-
         aircraftData.forEach(state => {
             const icao24 = state[0];
             const callsign = state[1] ? state[1].trim() : '';
@@ -530,60 +492,34 @@ const WorldViewFlights = (() => {
             const verticalRate = state[11];
             const geoAlt = state[13];
             const category = state[17];
-
-            // Skip aircraft without position or on ground
             if (longitude == null || latitude == null || onGround) return;
-
             const altitude = geoAlt || baroAlt || 10000;
             const mil = isMilitary(callsign, category);
             const icon = mil ? militaryIcon : civilianIcon;
-
             const position = Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude);
-
-            // Rotation based on heading
             const rotation = trueTrack != null ? -Cesium.Math.toRadians(trueTrack) : 0;
-
             billboardCollection.add({
-                position,
-                image: icon,
-                scale: mil ? 0.7 : 0.5,
-                rotation,
+                position, image: icon,
+                scale: mil ? 0.7 : 0.5, rotation,
                 alignedAxis: Cesium.Cartesian3.UNIT_Z,
                 verticalOrigin: Cesium.VerticalOrigin.CENTER,
                 horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
                 disableDepthTestDistance: 0,
-                id: {
-                    type: 'aircraft',
-                    icao24,
-                    callsign,
-                    originCountry,
-                    altitude,
-                    velocity,
-                    trueTrack,
-                    verticalRate,
-                    isMilitary: mil
-                }
+                id: { type: 'aircraft', icao24, callsign, originCountry, altitude, velocity, trueTrack, verticalRate, isMilitary: mil }
             });
-
-            // Show labels for military aircraft
             if (mil && callsign) {
                 labelCollection.add({
-                    position,
-                    text: callsign,
+                    position, text: callsign,
                     font: '10px Share Tech Mono',
                     fillColor: Cesium.Color.fromCssColorString('#ff3344'),
-                    outlineColor: Cesium.Color.BLACK,
-                    outlineWidth: 2,
+                    outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
                     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                     pixelOffset: new Cesium.Cartesian2(0, -20),
-                    disableDepthTestDistance: 0,
-                    scale: 1.0
+                    disableDepthTestDistance: 0, scale: 1.0
                 });
             }
         });
     }
-
-    // ── Click handler / popup ───────────────────────────────────────────────
 
     function setupClickHandler() {
         const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -591,39 +527,27 @@ const WorldViewFlights = (() => {
             const pickedObject = viewer.scene.pick(click.position);
             if (pickedObject && pickedObject.primitive && pickedObject.primitive.id) {
                 const id = pickedObject.primitive.id;
-                if (id.type === 'aircraft') {
-                    showAircraftPopup(id);
-                }
+                if (id.type === 'aircraft') { showAircraftPopup(id); }
             }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
     }
 
     function showAircraftPopup(data) {
-        // FIX 3: Respect unit preference from HUD
         const metric = WorldViewHUD.isMetric();
-
         let altStr = 'N/A';
         if (data.altitude != null) {
-            if (metric) {
-                altStr = Math.round(data.altitude).toLocaleString() + ' m';
-            } else {
-                const altFt = Math.round(data.altitude * 3.28084);
-                altStr = altFt.toLocaleString() + ' ft';
-            }
+            if (metric) { altStr = Math.round(data.altitude).toLocaleString() + ' m'; }
+            else { altStr = Math.round(data.altitude * 3.28084).toLocaleString() + ' ft'; }
         }
-
         let speedStr = 'N/A';
         if (data.velocity != null) {
-            if (metric) {
-                speedStr = (data.velocity * 3.6).toFixed(0) + ' km/h';
-            } else {
-                // Convert m/s to knots (1 m/s = 1.94384 kts) and mph (1 m/s = 2.23694 mph)
+            if (metric) { speedStr = (data.velocity * 3.6).toFixed(0) + ' km/h'; }
+            else {
                 const knots = (data.velocity * 1.94384).toFixed(0);
                 const mph = (data.velocity * 2.23694).toFixed(0);
                 speedStr = knots + ' kts (' + mph + ' mph)';
             }
         }
-
         const rows = [
             { key: 'CALLSIGN', value: data.callsign || 'N/A', class: data.isMilitary ? 'danger' : 'highlight' },
             { key: 'ICAO24', value: data.icao24 || 'N/A' },
@@ -631,63 +555,64 @@ const WorldViewFlights = (() => {
             { key: 'TYPE', value: data.isMilitary ? 'MILITARY' : 'CIVILIAN', class: data.isMilitary ? 'danger' : '' },
             { key: 'ALTITUDE', value: altStr },
             { key: 'SPEED', value: speedStr },
-            { key: 'HEADING', value: data.trueTrack != null ? data.trueTrack.toFixed(1) + '°' : 'N/A' },
-            { key: 'VERT RATE', value: data.verticalRate != null ? data.verticalRate.toFixed(1) + ' m/s' : 'N/A', class: data.verticalRate > 0 ? 'highlight' : (data.verticalRate < 0 ? 'warning' : '') }
+            { key: 'HEADING', value: data.trueTrack != null ? data.trueTrack.toFixed(1) + '\u00B0' : 'N/A' },
+            { key: 'VERT RATE', value: data.verticalRate != null ? data.verticalRate.toFixed(1) + ' m/s' : 'N/A', class: data.verticalRate > 0 ? 'highlight' : (data.verticalRate < 0 ? 'warning' : '') },
+            { key: 'SOURCE', value: activeSource }
         ];
-
-        const title = data.isMilitary ? '⚠ MILITARY AIRCRAFT' : '✈ AIRCRAFT';
+        const title = data.isMilitary ? '\u26A0 MILITARY AIRCRAFT' : '\u2708 AIRCRAFT';
         WorldViewHUD.showPopup(title, rows);
     }
 
-    // ── Lifecycle ───────────────────────────────────────────────────────────
+    let currentPollMs = 10000;
+
+    function startAdaptivePolling() {
+        function schedulePoll() {
+            const desiredMs = getPollIntervalMs();
+            if (desiredMs !== currentPollMs) {
+                console.log(`[Flights] Poll interval changed: ${currentPollMs / 1000}s \u2192 ${desiredMs / 1000}s`);
+                currentPollMs = desiredMs;
+                if (pollInterval) clearInterval(pollInterval);
+                pollInterval = setInterval(fetchAircraft, currentPollMs);
+            }
+        }
+        fetchAircraft();
+        pollInterval = setInterval(fetchAircraft, currentPollMs);
+        setInterval(schedulePoll, 5000);
+    }
 
     function init(cesiumViewer) {
         viewer = cesiumViewer;
-        console.log('[Flights] Initializing aircraft tracking...');
+        console.log('[Flights] Initializing aircraft tracking (multi-API waterfall)...');
         console.log('[Flights] Scene primitives available:', !!viewer.scene.primitives);
-
-        // Pre-create icons
+        const cfg = getConfig();
+        const hasAuth = isConfigured('openskyUsername') && isConfigured('openskyPassword');
+        console.log(`[Flights] OpenSky auth: ${hasAuth ? 'YES (Basic Auth)' : 'NO (anonymous)'}`);
+        console.log(`[Flights] ADSB.fi: ${cfg.adsbfiEnabled !== false ? 'ENABLED' : 'DISABLED'}`);
+        console.log(`[Flights] ADS-B Exchange: ${isConfigured('adsbExchangeApiKey') ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
         civilianIcon = createAircraftIcon('#00d4ff', 32);
         militaryIcon = createAircraftIcon('#ff3344', 32);
-
-        // Create billboard and label collections for performance
         billboardCollection = new Cesium.BillboardCollection();
         viewer.scene.primitives.add(billboardCollection);
-
         labelCollection = new Cesium.LabelCollection();
         viewer.scene.primitives.add(labelCollection);
-
-        // Setup click handler
         setupClickHandler();
-
-        // Start polling
-        fetchAircraft();
-        pollInterval = setInterval(fetchAircraft, 10000);
-
-        // Start interpolation animation loop
+        startAdaptivePolling();
         startInterpolationLoop();
-
-        console.log('[Flights] Aircraft tracking started (10s polling + interpolation).');
+        console.log('[Flights] Aircraft tracking started (adaptive polling + interpolation).');
     }
 
     function setVisible(v) {
         visible = v;
         if (billboardCollection) billboardCollection.show = v;
         if (labelCollection) labelCollection.show = v;
-        if (!v) {
-            WorldViewHUD.updateCounter('aircraft', 0);
-        }
+        if (!v) { WorldViewHUD.updateCounter('aircraft', 0); }
     }
 
     function destroy() {
         if (pollInterval) clearInterval(pollInterval);
         stopInterpolationLoop();
-        if (billboardCollection) {
-            viewer.scene.primitives.remove(billboardCollection);
-        }
-        if (labelCollection) {
-            viewer.scene.primitives.remove(labelCollection);
-        }
+        if (billboardCollection) { viewer.scene.primitives.remove(billboardCollection); }
+        if (labelCollection) { viewer.scene.primitives.remove(labelCollection); }
     }
 
     return { init, setVisible, destroy };
