@@ -14,7 +14,7 @@ const WorldViewSatellites = (() => {
     let visible = true;
     let selectedSatellite = null;
 
-    // TLE data sources
+    // TLE data sources — FIX 3: use CelesTrak GP format which is more reliable
     const TLE_SOURCES = [
         { url: '/api/tle/stations', direct: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle', group: 'station', color: [0, 255, 200] },
         { url: '/api/tle/gps-ops', direct: 'https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=tle', group: 'gps', color: [100, 200, 255] },
@@ -35,6 +35,11 @@ const WorldViewSatellites = (() => {
         console.log('[Satellites] Initializing satellite tracking...');
         console.log('[Satellites] satellite.js available:', typeof satellite !== 'undefined');
 
+        if (typeof satellite === 'undefined') {
+            console.error('[Satellites] CRITICAL: satellite.js library not loaded! Satellite tracking disabled.');
+            return;
+        }
+
         pointCollection = new Cesium.PointPrimitiveCollection();
         viewer.scene.primitives.add(pointCollection);
 
@@ -52,20 +57,41 @@ const WorldViewSatellites = (() => {
 
         for (const source of TLE_SOURCES) {
             try {
-                console.log(`[Satellites] Fetching TLE: ${source.group}...`);
+                console.log(`[Satellites] Fetching TLE: ${source.group} from ${source.url}...`);
                 let response;
+                let usedDirect = false;
+
                 try {
                     response = await fetch(source.url, { signal: AbortSignal.timeout(10000) });
-                } catch {
-                    response = await fetch(source.direct, { signal: AbortSignal.timeout(20000) });
+                    if (!response.ok) {
+                        throw new Error(`Proxy returned ${response.status}`);
+                    }
+                    console.log(`[Satellites] Proxy response for ${source.group}: ${response.status}`);
+                } catch (proxyErr) {
+                    console.log(`[Satellites] Proxy failed for ${source.group} (${proxyErr.message}), trying direct...`);
+                    usedDirect = true;
+                    try {
+                        response = await fetch(source.direct, { signal: AbortSignal.timeout(20000) });
+                        console.log(`[Satellites] Direct response for ${source.group}: ${response.status}`);
+                    } catch (directErr) {
+                        console.error(`[Satellites] Direct also failed for ${source.group}:`, directErr.message);
+                        continue;
+                    }
                 }
 
-                if (!response.ok) {
-                    console.warn(`[Satellites] Failed to fetch ${source.group}: ${response.status}`);
+                if (!response || !response.ok) {
+                    console.warn(`[Satellites] Failed to fetch ${source.group}: ${response ? response.status : 'no response'}`);
                     continue;
                 }
 
                 const text = await response.text();
+                console.log(`[Satellites] ${source.group} raw data length: ${text.length} chars (${usedDirect ? 'direct' : 'proxy'})`);
+
+                if (text.length < 50) {
+                    console.warn(`[Satellites] ${source.group} data too short, skipping.`);
+                    continue;
+                }
+
                 const records = parseTLE(text, source.group, source.color);
                 const limit = MAX_SATELLITES_PER_GROUP[source.group] || 500;
                 const limited = records.slice(0, limit);
@@ -80,6 +106,10 @@ const WorldViewSatellites = (() => {
         }
 
         console.log(`[Satellites] Total satellites loaded: ${satelliteRecords.length}`);
+
+        if (satelliteRecords.length === 0) {
+            console.warn('[Satellites] WARNING: No satellites loaded from any source!');
+        }
 
         // Start animation loop
         startUpdateLoop();
@@ -188,13 +218,14 @@ const WorldViewSatellites = (() => {
                     break;
             }
 
+            // FIX 2: disableDepthTestDistance: 0 so satellites behind Earth are hidden
             pointCollection.add({
                 position: position,
                 pixelSize: pixelSize,
                 color: color,
                 outlineColor: Cesium.Color.fromBytes(rec.color[0], rec.color[1], rec.color[2], 80),
                 outlineWidth: 1,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                disableDepthTestDistance: 0,
                 id: {
                     type: 'satellite',
                     index: index,

@@ -29,11 +29,15 @@ const WorldViewEarthquakes = (() => {
         if (!visible) return;
 
         try {
+            console.log('[Earthquakes] Fetching earthquake data...');
             let response;
             try {
                 response = await fetch(USGS_API, { signal: AbortSignal.timeout(8000) });
-            } catch {
+                console.log('[Earthquakes] Proxy response:', response.status);
+            } catch (proxyErr) {
+                console.log('[Earthquakes] Proxy failed, trying direct...', proxyErr.message);
                 response = await fetch(USGS_DIRECT, { signal: AbortSignal.timeout(15000) });
+                console.log('[Earthquakes] Direct response:', response.status);
             }
 
             if (!response.ok) {
@@ -43,7 +47,7 @@ const WorldViewEarthquakes = (() => {
 
             const data = await response.json();
             if (!data || !data.features) {
-                console.warn('[Earthquakes] No earthquake data.');
+                console.warn('[Earthquakes] No earthquake data. Response keys:', Object.keys(data || {}));
                 return;
             }
 
@@ -139,7 +143,7 @@ const WorldViewEarthquakes = (() => {
                 earthquakeEntities.push(pulseEntity);
             }
 
-            // Label for significant quakes (M5+)
+            // FIX 2: Label for significant quakes (M5+) — disableDepthTestDistance: 0
             if (magnitude >= 5) {
                 const labelEntity = viewer.entities.add({
                     position: Cesium.Cartesian3.fromDegrees(longitude, latitude, 10000),
@@ -152,7 +156,7 @@ const WorldViewEarthquakes = (() => {
                         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                         verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
                         pixelOffset: new Cesium.Cartesian2(0, -10),
-                        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                        disableDepthTestDistance: 0,
                         scale: 1.0
                     }
                 });
