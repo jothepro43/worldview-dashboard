@@ -184,7 +184,7 @@ const WorldViewFlights = (() => {
                 alignedAxis: Cesium.Cartesian3.UNIT_Z,
                 verticalOrigin: Cesium.VerticalOrigin.CENTER,
                 horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                disableDepthTestDistance: 0,
                 id: {
                     type: 'aircraft',
                     icao24: icao24,
@@ -209,7 +209,7 @@ const WorldViewFlights = (() => {
                     outlineWidth: 2,
                     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                     pixelOffset: new Cesium.Cartesian2(0, -20),
-                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                    disableDepthTestDistance: 0,
                     scale: 1.0
                 });
             }

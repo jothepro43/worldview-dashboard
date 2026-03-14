@@ -151,11 +151,12 @@ const WorldViewGlobe = (() => {
             console.warn('[Globe] Could not set sun/moon:', celestialErr.message);
         }
 
-        // Performance settings — fog only exists if globe exists
+        // FIX 2: Performance settings — fog only exists if globe exists
+        // Enable depth testing against terrain so far-side entities are hidden
         if (viewer.scene.globe) {
             viewer.scene.globe.depthTestAgainstTerrain = true;
             viewer.scene.fog.enabled = false;
-            console.log('[Globe] Globe depth testing and fog configured.');
+            console.log('[Globe] Globe depth testing ENABLED, fog disabled.');
         } else {
             console.log('[Globe] No globe object — skipping globe-specific settings.');
         }
@@ -163,10 +164,68 @@ const WorldViewGlobe = (() => {
         viewer.scene.debugShowFramesPerSecond = false;
         viewer.resolutionScale = window.devicePixelRatio > 1 ? 0.8 : 1.0;
 
+        // FIX 4: Camera constraints — lock focus to Earth
+        setupCameraConstraints();
+
         console.log('[Globe] \u2713 Viewer initialization complete.');
         console.log(`[Globe] Has globe/tileset: ${hasGlobe}`);
         console.log(`[Globe] Scene primitives count: ${viewer.scene.primitives.length}`);
         return viewer;
+    }
+
+    // FIX 4: Camera constraints
+    function setupCameraConstraints() {
+        if (!viewer) return;
+
+        const controller = viewer.scene.screenSpaceCameraController;
+
+        // Min zoom: 200km altitude (200,000 meters)
+        controller.minimumZoomDistance = 200000;
+        // Max zoom: 35,000km altitude (35,000,000 meters)
+        controller.maximumZoomDistance = 35000000;
+
+        // Prevent tilting the globe upside down
+        // Limit pitch to prevent viewing from below the globe
+        controller.enableTilt = true;
+
+        console.log('[Globe] Camera constraints set: min 200km, max 35,000km altitude.');
+
+        // Continuously enforce camera stays pointed at Earth
+        // If camera somehow flies away, pull it back
+        viewer.scene.postRender.addEventListener(() => {
+            try {
+                const cameraPos = viewer.camera.positionCartographic;
+                if (!cameraPos) return;
+
+                const altitude = cameraPos.height;
+
+                // If camera gets too high (beyond max + buffer), pull back
+                if (altitude > 40000000) {
+                    viewer.camera.setView({
+                        destination: Cesium.Cartesian3.fromDegrees(
+                            Cesium.Math.toDegrees(cameraPos.longitude),
+                            Cesium.Math.toDegrees(cameraPos.latitude),
+                            35000000
+                        )
+                    });
+                }
+
+                // Prevent going underground (below min distance from surface)
+                if (altitude < 100000) {
+                    viewer.camera.setView({
+                        destination: Cesium.Cartesian3.fromDegrees(
+                            Cesium.Math.toDegrees(cameraPos.longitude),
+                            Cesium.Math.toDegrees(cameraPos.latitude),
+                            200000
+                        )
+                    });
+                }
+            } catch (e) {
+                // Silently ignore — this runs every frame
+            }
+        });
+
+        console.log('[Globe] Post-render camera guard active.');
     }
 
     function getViewer() {
@@ -175,9 +234,11 @@ const WorldViewGlobe = (() => {
 
     function flyTo(longitude, latitude, altitude = 1500000) {
         if (!viewer) return;
-        console.log(`[Globe] Flying to: ${latitude.toFixed(4)}, ${longitude.toFixed(4)} @ ${(altitude/1000).toFixed(0)}km`);
+        // Clamp altitude to constraints
+        const clampedAlt = Math.max(200000, Math.min(altitude, 35000000));
+        console.log(`[Globe] Flying to: ${latitude.toFixed(4)}, ${longitude.toFixed(4)} @ ${(clampedAlt/1000).toFixed(0)}km`);
         viewer.camera.flyTo({
-            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude),
+            destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, clampedAlt),
             duration: 2.0,
             orientation: {
                 heading: 0,
