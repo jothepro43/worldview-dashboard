@@ -28,6 +28,7 @@ const WorldViewCameras = (() => {
 
         setupClickHandler();
         setupViewportListener();
+        setupFeedModalClose();
 
         console.log('[Cameras] Camera layer initialized (viewport-based loading).');
     }
@@ -200,7 +201,9 @@ const WorldViewCameras = (() => {
                     operator: operator,
                     url: url,
                     indoor: indoor,
-                    osmId: element.id
+                    osmId: element.id,
+                    lat: element.lat,
+                    lon: element.lon
                 }
             });
             cameraEntities.push(entity);
@@ -220,8 +223,23 @@ const WorldViewCameras = (() => {
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
     }
 
+    // FIX 1: Show popup with VIEW FEED button
     function showCameraPopup(props) {
         const url = props.url ? props.url.getValue() : null;
+
+        // Extract lat/lon — stored directly in properties, or fall back to entity position
+        let lat = props.lat ? props.lat.getValue() : null;
+        let lon = props.lon ? props.lon.getValue() : null;
+
+        // Fallback: extract from Cartesian3 entity position if lat/lon not stored
+        if ((lat == null || lon == null) && pickedEntityPosition) {
+            try {
+                const carto = Cesium.Cartographic.fromCartesian(pickedEntityPosition);
+                lat = Cesium.Math.toDegrees(carto.latitude);
+                lon = Cesium.Math.toDegrees(carto.longitude);
+            } catch (e) { /* ignore */ }
+        }
+
         const rows = [
             { key: 'TYPE', value: props.cameraType ? props.cameraType.getValue() : 'Unknown', class: 'highlight' },
             { key: 'OPERATOR', value: props.operator ? props.operator.getValue() : 'Unknown' },
@@ -234,7 +252,146 @@ const WorldViewCameras = (() => {
             rows.push({ key: 'URL', value: url });
         }
 
-        WorldViewHUD.showPopup('\u25ce SURVEILLANCE CAMERA', rows);
+        // FIX 1: Add VIEW FEED button row
+        const capturedLat = lat;
+        const capturedLon = lon;
+        const capturedUrl = url;
+        rows.push({
+            type: 'button',
+            label: 'VIEW FEED',
+            onclick: () => {
+                openFeedViewer(capturedUrl, capturedLat, capturedLon);
+            }
+        });
+
+        WorldViewHUD.showPopup('◎ SURVEILLANCE CAMERA', rows);
+    }
+
+    // Keep track of last clicked entity position as fallback
+    let pickedEntityPosition = null;
+
+    // FIX 1: Open the feed viewer modal
+    function openFeedViewer(url, lat, lon) {
+        const modal = document.getElementById('camera-feed-modal');
+        const iframeContainer = document.getElementById('feed-iframe-container');
+        const iframe = document.getElementById('feed-iframe');
+        const svContainer = document.getElementById('feed-streetview-container');
+        const svImg = document.getElementById('feed-streetview-img');
+        const unavailEl = document.getElementById('feed-unavailable');
+        const loadingEl = document.getElementById('feed-loading');
+        const statusEl = document.getElementById('feed-modal-status');
+
+        if (!modal) return;
+
+        // Reset all containers
+        iframeContainer.classList.add('hidden');
+        svContainer.classList.add('hidden');
+        unavailEl.classList.add('hidden');
+        loadingEl.classList.remove('hidden');
+        iframe.src = '';
+        svImg.src = '';
+
+        // Show modal
+        modal.classList.remove('hidden');
+
+        if (url) {
+            // Try to load the camera's URL in an iframe
+            statusEl.textContent = 'SOURCE: ' + url.substring(0, 60) + (url.length > 60 ? '...' : '');
+
+            iframeContainer.classList.remove('hidden');
+            loadingEl.classList.add('hidden');
+
+            // Listen for load errors on the iframe
+            iframe.onerror = () => {
+                console.warn('[Cameras] Feed iframe failed to load:', url);
+                iframeContainer.classList.add('hidden');
+                tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl);
+            };
+
+            // Set a timeout — if the iframe doesn't signal load in 8s, try street view
+            let iframeLoadTimeout = setTimeout(() => {
+                // iframe.contentDocument is null for cross-origin, which is normal
+                // We cannot reliably detect load failures for cross-origin iframes,
+                // so we just leave the iframe showing (it either loaded or shows a browser error)
+                console.log('[Cameras] Feed iframe timeout — showing as-is.');
+            }, 8000);
+
+            iframe.onload = () => {
+                clearTimeout(iframeLoadTimeout);
+                loadingEl.classList.add('hidden');
+                console.log('[Cameras] Feed iframe loaded.');
+            };
+
+            iframe.src = url;
+
+        } else if (lat != null && lon != null) {
+            // No URL — try Street View
+            statusEl.textContent = 'NO STREAM URL — LOADING STREET VIEW...';
+            tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl);
+        } else {
+            // Nothing available
+            loadingEl.classList.add('hidden');
+            unavailEl.classList.remove('hidden');
+            statusEl.textContent = 'NO FEED DATA AVAILABLE';
+        }
+    }
+
+    // FIX 1: Attempt to load a Street View static image
+    function tryStreetView(lat, lon, svContainer, svImg, unavailEl, loadingEl, statusEl) {
+        if (lat == null || lon == null) {
+            loadingEl.classList.add('hidden');
+            unavailEl.classList.remove('hidden');
+            statusEl.textContent = 'NO LOCATION DATA AVAILABLE';
+            return;
+        }
+
+        // Build Street View static API URL (key may be absent — handled gracefully)
+        const svUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${lat},${lon}&heading=0&pitch=0&fov=90&key=`;
+
+        statusEl.textContent = `STREET VIEW: ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+
+        svImg.onload = () => {
+            loadingEl.classList.add('hidden');
+            svContainer.classList.remove('hidden');
+            // The Street View API returns a gray image (not an HTTP error) when there's no imagery.
+            // We show it as-is; the user sees what's available.
+            statusEl.textContent = `STREET VIEW @ ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+            console.log('[Cameras] Street View image loaded.');
+        };
+
+        svImg.onerror = () => {
+            loadingEl.classList.add('hidden');
+            unavailEl.classList.remove('hidden');
+            statusEl.textContent = 'STREET VIEW UNAVAILABLE';
+            console.warn('[Cameras] Street View image failed to load.');
+        };
+
+        svImg.src = svUrl;
+    }
+
+    // FIX 1: Wire up the modal close button
+    function setupFeedModalClose() {
+        const closeBtn = document.getElementById('feed-modal-close');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', closeFeedViewer);
+        }
+
+        // Close on backdrop click
+        const modal = document.getElementById('camera-feed-modal');
+        if (modal) {
+            const backdrop = modal.querySelector('.feed-modal-backdrop');
+            if (backdrop) {
+                backdrop.addEventListener('click', closeFeedViewer);
+            }
+        }
+    }
+
+    function closeFeedViewer() {
+        const modal = document.getElementById('camera-feed-modal');
+        const iframe = document.getElementById('feed-iframe');
+        if (modal) modal.classList.add('hidden');
+        // Stop iframe playback
+        if (iframe) iframe.src = '';
     }
 
     function clearEntities() {
