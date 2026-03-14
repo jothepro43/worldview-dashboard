@@ -98,6 +98,53 @@
             </button>
         </div>
 
+        <!-- FIX 6: Satellite Category Filter Panel -->
+        <div id="hud-sat-filters">
+            <div class="filter-title">SATELLITE FILTERS</div>
+            <label class="sat-filter-item">
+                <input type="checkbox" data-sat-cat="military" checked>
+                <span class="sat-filter-color" style="background:#ff3344"></span>
+                <span class="sat-filter-name">Military</span>
+                <span class="sat-filter-count" id="sat-count-military">0</span>
+            </label>
+            <label class="sat-filter-item">
+                <input type="checkbox" data-sat-cat="starlink" checked>
+                <span class="sat-filter-color" style="background:#bb44ff"></span>
+                <span class="sat-filter-name">Starlink</span>
+                <span class="sat-filter-count" id="sat-count-starlink">0</span>
+            </label>
+            <label class="sat-filter-item">
+                <input type="checkbox" data-sat-cat="gps" checked>
+                <span class="sat-filter-color" style="background:#ffdd00"></span>
+                <span class="sat-filter-name">GPS</span>
+                <span class="sat-filter-count" id="sat-count-gps">0</span>
+            </label>
+            <label class="sat-filter-item">
+                <input type="checkbox" data-sat-cat="imaging" checked>
+                <span class="sat-filter-color" style="background:#ff8800"></span>
+                <span class="sat-filter-name">Imaging</span>
+                <span class="sat-filter-count" id="sat-count-imaging">0</span>
+            </label>
+            <label class="sat-filter-item">
+                <input type="checkbox" data-sat-cat="iss" checked>
+                <span class="sat-filter-color" style="background:#ffffff"></span>
+                <span class="sat-filter-name">ISS</span>
+                <span class="sat-filter-count" id="sat-count-iss">0</span>
+            </label>
+            <label class="sat-filter-item">
+                <input type="checkbox" data-sat-cat="debris" checked>
+                <span class="sat-filter-color" style="background:#888888"></span>
+                <span class="sat-filter-name">Debris</span>
+                <span class="sat-filter-count" id="sat-count-debris">0</span>
+            </label>
+            <label class="sat-filter-item">
+                <input type="checkbox" data-sat-cat="commercial" checked>
+                <span class="sat-filter-color" style="background:#00ddff"></span>
+                <span class="sat-filter-name">Commercial</span>
+                <span class="sat-filter-count" id="sat-count-commercial">0</span>
+            </label>
+        </div>
+
         <!-- Bottom Left: Shader Modes -->
         <div id="hud-shaders">
             <div class="shader-title">RENDER MODE</div>
@@ -107,11 +154,14 @@
                 <button class="shader-btn" data-shader="flir">FLIR</button>
                 <button class="shader-btn" data-shader="crt">CRT</button>
             </div>
+            <button id="labels-toggle" class="labels-toggle-btn active">EN LABELS</button>
         </div>
 
         <!-- Bottom Right: Info Panel -->
         <div id="hud-info">
             <div class="info-title">SYSTEM STATUS</div>
+            <!-- FIX 3: KM/MI unit toggle -->
+            <button id="unit-toggle" class="unit-toggle-btn">KM</button>
             <div class="info-content" id="info-content">
                 <div class="info-row"><span class="info-key">STATUS</span><span class="info-val" id="status-text">INITIALIZING...</span></div>
                 <div class="info-row"><span class="info-key">TIME</span><span class="info-val" id="utc-time">--:--:--Z</span></div>
@@ -128,6 +178,42 @@
                 <button class="popup-close" id="popup-close">&#10005;</button>
             </div>
             <div class="popup-body" id="popup-body"></div>
+        </div>
+
+        <!-- FIX 1: Camera Feed Modal -->
+        <div id="camera-feed-modal" class="hidden">
+            <div class="feed-modal-backdrop"></div>
+            <div class="feed-modal-panel">
+                <div class="feed-modal-header">
+                    <span class="feed-modal-title">&#9678; LIVE FEED</span>
+                    <button class="feed-modal-close" id="feed-modal-close">&#10005;</button>
+                </div>
+                <div class="feed-modal-body">
+                    <div id="feed-iframe-container" class="hidden">
+                        <iframe id="feed-iframe" src="" frameborder="0" allowfullscreen
+                            sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+                    </div>
+                    <div id="feed-streetview-container" class="hidden">
+                        <img id="feed-streetview-img" src="" alt="Street View">
+                    </div>
+                    <div id="feed-unavailable" class="hidden">
+                        <div class="feed-unavailable-msg">
+                            <span class="feed-unavail-icon">&#9888;</span>
+                            <span>NO FEED AVAILABLE</span>
+                            <span class="feed-unavail-sub">No stream URL or Street View data for this location</span>
+                        </div>
+                    </div>
+                    <div id="feed-loading" class="hidden">
+                        <div class="feed-loading-msg">
+                            <span class="feed-loading-dot"></span>
+                            ACQUIRING FEED...
+                        </div>
+                    </div>
+                </div>
+                <div class="feed-modal-footer">
+                    <span id="feed-modal-status" class="feed-status-text">--</span>
+                </div>
+            </div>
         </div>
     </div>
 
