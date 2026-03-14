@@ -73,9 +73,22 @@ app.use(express.json());
 
 // --- API Routes ---
 
-// OpenSky Network
+// OpenSky Network (supports optional bbox query params forwarded verbatim)
 app.get('/api/opensky', (req, res) => {
-    proxyRequest('https://opensky-network.org/api/states/all', req, res);
+    const qs = new URLSearchParams(req.query).toString();
+    const url = qs
+        ? `https://opensky-network.org/api/states/all?${qs}`
+        : 'https://opensky-network.org/api/states/all';
+    proxyRequest(url, req, res);
+});
+
+// ADS-B Exchange (adsb.lol) – free community fallback
+app.get('/api/adsb', (req, res) => {
+    const lat  = parseFloat(req.query.lat)  || 0;
+    const lon  = parseFloat(req.query.lon)  || 0;
+    const dist = parseInt(req.query.dist, 10) || 250;
+    const url = `https://api.adsb.lol/v2/lat/${lat}/lon/${lon}/dist/${dist}`;
+    proxyRequest(url, req, res);
 });
 
 // CelesTrak TLE data
@@ -149,7 +162,7 @@ app.listen(PORT, () => {
     console.log(`  Running on http://localhost:${PORT}`);
     console.log('========================================\n');
     console.log('API Endpoints:');
-    console.log(`  GET  /api/opensky      -> OpenSky Network`);
+    console.log(`  GET  /api/opensky      -> OpenSky Network (bbox supported)\n  GET  /api/adsb         -> ADS-B Exchange (adsb.lol fallback)`);
     console.log(`  GET  /api/tle/:group   -> CelesTrak TLE`);
     console.log(`  GET  /api/earthquakes  -> USGS Earthquakes`);
     console.log(`  GET  /api/eonet        -> NASA EONET`);
