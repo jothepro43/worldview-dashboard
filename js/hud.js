@@ -24,6 +24,9 @@ const WorldViewHUD = (() => {
     let onLayerToggleCallback = null;
     let onShaderChangeCallback = null;
 
+    // FIX 3: Unit preference — default metric (KM), persisted to localStorage
+    let useMetric = localStorage.getItem('worldview-units') !== 'imperial';
+
     function init(cesiumViewer) {
         viewer = cesiumViewer;
         console.log('[HUD] Initializing HUD controls...');
@@ -32,6 +35,7 @@ const WorldViewHUD = (() => {
         setupShaderButtons();
         setupSearch();
         setupPopupClose();
+        setupUnitToggle();
         startClockUpdate();
         startCameraInfoUpdate();
 
@@ -161,6 +165,21 @@ const WorldViewHUD = (() => {
 
         data.forEach(item => {
             const row = document.createElement('div');
+
+            // Support special 'button' row type
+            if (item.type === 'button') {
+                row.className = 'popup-row popup-btn-row';
+                const btn = document.createElement('button');
+                btn.className = 'popup-action-btn';
+                btn.textContent = item.label;
+                if (item.onclick) {
+                    btn.addEventListener('click', item.onclick);
+                }
+                row.appendChild(btn);
+                bodyEl.appendChild(row);
+                return;
+            }
+
             row.className = 'popup-row';
 
             const key = document.createElement('span');
@@ -210,6 +229,34 @@ const WorldViewHUD = (() => {
         setInterval(updateClock, 1000);
     }
 
+    // --- FIX 3: Unit Toggle ---
+    function setupUnitToggle() {
+        const btn = document.getElementById('unit-toggle');
+        if (!btn) return;
+
+        // Set initial visual state
+        updateUnitToggleUI(btn);
+
+        btn.addEventListener('click', () => {
+            useMetric = !useMetric;
+            localStorage.setItem('worldview-units', useMetric ? 'metric' : 'imperial');
+            updateUnitToggleUI(btn);
+            console.log(`[HUD] Units switched to: ${useMetric ? 'KM (metric)' : 'MI (imperial)'}`);
+        });
+    }
+
+    function updateUnitToggleUI(btn) {
+        if (!btn) btn = document.getElementById('unit-toggle');
+        if (!btn) return;
+        btn.textContent = useMetric ? 'KM' : 'MI';
+        btn.classList.toggle('active', !useMetric); // highlight when imperial (non-default)
+    }
+
+    // Public method: returns true if metric (KM) mode is active
+    function isMetric() {
+        return useMetric;
+    }
+
     // --- Camera Info ---
     function startCameraInfoUpdate() {
         function updateCameraInfo() {
@@ -220,15 +267,28 @@ const WorldViewHUD = (() => {
             const lonEl = document.getElementById('cam-lon');
             const altEl = document.getElementById('cam-alt');
 
-            if (latEl) latEl.textContent = pos.lat.toFixed(4) + '°';
-            if (lonEl) lonEl.textContent = pos.lon.toFixed(4) + '°';
+            if (latEl) latEl.textContent = pos.lat.toFixed(4) + '\u00b0';
+            if (lonEl) lonEl.textContent = pos.lon.toFixed(4) + '\u00b0';
+
             if (altEl) {
-                if (pos.alt > 1000000) {
-                    altEl.textContent = (pos.alt / 1000).toFixed(0) + ' km';
-                } else if (pos.alt > 1000) {
-                    altEl.textContent = (pos.alt / 1000).toFixed(1) + ' km';
+                if (useMetric) {
+                    // Metric: show in km or m
+                    if (pos.alt > 1000000) {
+                        altEl.textContent = (pos.alt / 1000).toFixed(0) + ' km';
+                    } else if (pos.alt > 1000) {
+                        altEl.textContent = (pos.alt / 1000).toFixed(1) + ' km';
+                    } else {
+                        altEl.textContent = pos.alt.toFixed(0) + ' m';
+                    }
                 } else {
-                    altEl.textContent = pos.alt.toFixed(0) + ' m';
+                    // Imperial: show in miles or feet
+                    const altMiles = pos.alt / 1609.34;
+                    const altFeet = pos.alt * 3.28084;
+                    if (altMiles > 1) {
+                        altEl.textContent = altMiles.toFixed(1) + ' mi';
+                    } else {
+                        altEl.textContent = Math.round(altFeet).toLocaleString() + ' ft';
+                    }
                 }
             }
         }
@@ -269,6 +329,7 @@ const WorldViewHUD = (() => {
         getCounter,
         setLoadingProgress,
         hideLoadingScreen,
-        setStatus
+        setStatus,
+        isMetric
     };
 })();
