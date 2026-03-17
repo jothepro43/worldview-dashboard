@@ -105,29 +105,113 @@ const WorldViewCameras = (() => {
         if (isFetching) return;
         isFetching = true;
         const allCameras = [];
-        const [osmCameras, windyCameras] = await Promise.all([
+        const [osmCameras, windyCameras, gdotCameras] = await Promise.all([
             fetchOSMCameras(bounds),
-            fetchWindyWebcams(bounds)
+            fetchWindyWebcams(bounds),
+            fetch511GACameras(bounds)
         ]);
         if (osmCameras) allCameras.push(...osmCameras);
         if (windyCameras) allCameras.push(...windyCameras);
+        if (gdotCameras) allCameras.push(...gdotCameras);
         renderCameras(allCameras);
         cameraCount = allCameras.length;
         WorldViewHUD.updateCounter('cameras', cameraCount);
-        console.log(`[Cameras] Total: ${allCameras.length} live-feed cameras (OSM: ${osmCameras ? osmCameras.length : 0}, Windy: ${windyCameras ? windyCameras.length : 0}).`);
+        console.log(`[Cameras] Total: ${allCameras.length} live-feed cameras (OSM: ${osmCameras ? osmCameras.length : 0}, Windy: ${windyCameras ? windyCameras.length : 0}, GDOT: ${gdotCameras ? gdotCameras.length : 0}).`);
         isFetching = false;
     }
 
+    async function fetch511GACameras(bounds) {
+        // Simple bounding box check to see if we should query Georgia
+        // Georgia approx bounds: Lat 30.3-35.0, Lon -85.6 to -80.8
+        if (bounds.north < 30.0 || bounds.south > 35.5 || bounds.east < -86.0 || bounds.west > -80.0) {
+            return [];
+        }
+
+        try {
+            // Fetch more cameras (increased limit to 2000 to catch all available)
+            const response = await fetch('/api/gdot-cameras?start=0&length=2000');
+            if (!response.ok) {
+                console.warn('[Cameras] GDOT API returned error:', response.status);
+                return [];
+            }
+            
+            const data = await response.json();
+            if (!data || !data.data || !Array.isArray(data.data)) {
+                console.warn('[Cameras] GDOT API returned unexpected format:', data);
+                return [];
+            }
+
+            console.log(`[Cameras] GDOT returned ${data.data.length} raw camera records.`);
+
+            return data.data.map(cam => {
+                // GDOT uses WKT for location: "POINT (-84.388 33.749)"
+                let lat = 0, lon = 0;
+                if (cam.latLng && cam.latLng.geography && cam.latLng.geography.wellKnownText) {
+                    const wkt = cam.latLng.geography.wellKnownText;
+                    const parts = wkt.replace('POINT (', '').replace(')', '').split(' ');
+                    lon = parseFloat(parts[0]);
+                    lat = parseFloat(parts[1]);
+                }
+
+                // Check bounds
+                if (lat < bounds.south || lat > bounds.north || lon < bounds.west || lon > bounds.east) {
+                    return null;
+                }
+
+                // Get best image/stream
+                let streamUrl = null;
+                let isVideo = false;
+                if (cam.images && cam.images.length > 0) {
+                    const img = cam.images[0];
+                    if (img.videoUrl && img.videoType === 'hls') {
+                        streamUrl = img.videoUrl;
+                        isVideo = true;
+                    } else if (img.imageUrl) {
+                        streamUrl = 'https://511ga.org' + img.imageUrl;
+                    }
+                }
+
+                if (!streamUrl) return null;
+
+                return {
+                    source: 'gdot',
+                    lat: lat,
+                    lon: lon,
+                    streamUrl: streamUrl,
+                    streamType: isVideo ? 'hls' : 'image',
+                    cameraType: 'Traffic Cam',
+                    operator: 'GDOT',
+                    description: cam.location || cam.roadway,
+                    originalUrl: 'https://511ga.org/map' // Fallback for "Open External"
+                };
+            }).filter(c => c !== null);
+
+        } catch (err) {
+            console.warn('[Cameras] GDOT fetch failed:', err);
+            return [];
+        }
+    }
+
     async function fetchOSMCameras(bounds) {
+        // Expand query to catch more potential cameras (traffic, tourism, attractions)
         const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
-        const query = `[out:json][timeout:30];(
-            node["man_made"="surveillance"]["contact:webcam"](${bbox});
-            node["man_made"="surveillance"]["url"](${bbox});
-            node["man_made"="surveillance"]["webcam"](${bbox});
-            node["surveillance"="camera"]["contact:webcam"](${bbox});
-            node["surveillance"="camera"]["url"](${bbox});
-            node["surveillance"="camera"]["webcam"](${bbox});
-        );out body;`;
+        const query = `
+            [out:json][timeout:25];
+            (
+              node["man_made"="surveillance"]["contact:webcam"](${bbox});
+              node["man_made"="surveillance"]["url"](${bbox});
+              node["man_made"="surveillance"]["webcam"](${bbox});
+              node["surveillance"="camera"]["contact:webcam"](${bbox});
+              node["surveillance"="camera"]["url"](${bbox});
+              node["surveillance"="camera"]["webcam"](${bbox});
+              node["tourism"="viewpoint"]["url"](${bbox});
+              node["tourism"="attraction"]["url"](${bbox});
+              node["traffic_monitoring"="outdoor"]["url"](${bbox});
+            );
+            out body;
+            >;
+            out skel qt;
+        `;
         console.log(`[Cameras] OSM query for stream-URL cameras in bbox: ${bbox}`);
         try {
             let response;
@@ -253,14 +337,15 @@ const WorldViewCameras = (() => {
         clearEntities();
         cameras.forEach(cam => {
             if (cam.lat == null || cam.lon == null) return;
-            const icon = cam.source === 'windy' ? windyCameraIcon : osmCameraIcon;
+            const icon = cam.source === 'windy' ? windyCameraIcon : (cam.source === 'gdot' ? osmCameraIcon : osmCameraIcon);
             const entity = viewer.entities.add({
                 position: Cesium.Cartesian3.fromDegrees(cam.lon, cam.lat, 10),
                 billboard: {
                     image: icon, scale: 0.8,
                     verticalOrigin: Cesium.VerticalOrigin.CENTER,
                     horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-                    disableDepthTestDistance: 0
+                    disableDepthTestDistance: 0,
+                    color: cam.source === 'gdot' ? Cesium.Color.ORANGE : Cesium.Color.WHITE
                 },
                 properties: {
                     type: 'camera', source: cam.source,
@@ -268,7 +353,8 @@ const WorldViewCameras = (() => {
                     streamUrl: cam.streamUrl, streamType: cam.streamType,
                     indoor: cam.indoor, osmId: cam.osmId || null,
                     windyId: cam.windyId || null,
-                    lat: cam.lat, lon: cam.lon
+                    lat: cam.lat, lon: cam.lon,
+                    originalUrl: cam.originalUrl || null // Pass this through
                 }
             });
             cameraEntities.push(entity);
@@ -292,12 +378,13 @@ const WorldViewCameras = (() => {
         const streamUrl = props.streamUrl ? props.streamUrl.getValue() : null;
         const streamType = props.streamType ? props.streamType.getValue() : 'unknown';
         const source = props.source ? props.source.getValue() : 'unknown';
+        const originalUrl = props.originalUrl ? props.originalUrl.getValue() : streamUrl; // Fallback to streamUrl
         let lat = props.lat ? props.lat.getValue() : null;
         let lon = props.lon ? props.lon.getValue() : null;
         const rows = [
             { key: 'TYPE', value: props.cameraType ? props.cameraType.getValue() : 'Unknown', class: 'highlight' },
             { key: 'OPERATOR', value: props.operator ? props.operator.getValue() : 'Unknown' },
-            { key: 'SOURCE', value: source === 'windy' ? 'Windy Webcams' : 'OpenStreetMap' },
+            { key: 'SOURCE', value: source === 'windy' ? 'Windy Webcams' : (source === 'gdot' ? 'GDOT 511' : 'OpenStreetMap') },
             { key: 'ZONE', value: props.indoor && props.indoor.getValue() ? 'INDOOR' : 'OUTDOOR' },
             { key: 'STREAM', value: streamUrl ? streamType.toUpperCase() : 'Not available', class: streamUrl ? 'highlight' : '' }
         ];
@@ -308,14 +395,15 @@ const WorldViewCameras = (() => {
         const capturedLon = lon;
         const capturedUrl = streamUrl;
         const capturedType = streamType;
+        const capturedOriginal = originalUrl;
         rows.push({
             type: 'button', label: 'VIEW FEED',
-            onclick: () => { openFeedViewer(capturedUrl, capturedType, capturedLat, capturedLon); }
+            onclick: () => { openFeedViewer(capturedUrl, capturedType, capturedLat, capturedLon, capturedOriginal); }
         });
         WorldViewHUD.showPopup('\u25CE SURVEILLANCE CAMERA', rows);
     }
 
-    function openFeedViewer(url, streamType, lat, lon) {
+    function openFeedViewer(url, streamType, lat, lon, originalUrl) {
         const modal = document.getElementById('camera-feed-modal');
         const iframeContainer = document.getElementById('feed-iframe-container');
         const iframe = document.getElementById('feed-iframe');
@@ -324,17 +412,33 @@ const WorldViewCameras = (() => {
         const unavailEl = document.getElementById('feed-unavailable');
         const loadingEl = document.getElementById('feed-loading');
         const statusEl = document.getElementById('feed-modal-status');
+        const externalBtn = document.getElementById('feed-open-external');
+
         if (!modal) return;
+        
         iframeContainer.classList.add('hidden');
         svContainer.classList.add('hidden');
         unavailEl.classList.add('hidden');
         loadingEl.classList.remove('hidden');
         iframe.src = '';
         svImg.src = '';
-        const existingMjpeg = modal.querySelector('.mjpeg-feed-img');
+        
+        const existingMjpeg = iframeContainer.querySelector('.mjpeg-feed-img');
         if (existingMjpeg) existingMjpeg.remove();
-        const existingVideo = modal.querySelector('.hls-feed-video');
+        const existingVideo = iframeContainer.querySelector('.hls-feed-video');
         if (existingVideo) existingVideo.remove();
+
+        // Setup external button
+        if (externalBtn) {
+            const targetUrl = originalUrl || url;
+            if (targetUrl) {
+                externalBtn.style.display = 'flex';
+                externalBtn.onclick = () => window.open(targetUrl, '_blank');
+            } else {
+                externalBtn.style.display = 'none';
+            }
+        }
+        
         modal.classList.remove('hidden');
 
         if (url && streamType === 'mjpeg') {
@@ -395,10 +499,17 @@ const WorldViewCameras = (() => {
         }
     }
 
-    function loadIframePlayer(url, iframeContainer, iframe, loadingEl, statusEl, lat, lon, svContainer, svImg, unavailEl) {
+    function loadIframePlayer(url, iframeContainer, iframe, loadingEl, statusEl, lat, lon, svContainer, svImg, unavailEl, openExternalBtn) {
         statusEl.textContent = 'SOURCE: ' + url.substring(0, 60) + (url.length > 60 ? '...' : '');
         iframeContainer.classList.remove('hidden');
         loadingEl.classList.add('hidden');
+        
+        // Setup external button if available
+        if (openExternalBtn) {
+            openExternalBtn.onclick = () => window.open(url, '_blank');
+            openExternalBtn.style.display = 'flex'; // Show it
+        }
+
         iframe.onerror = () => {
             console.warn('[Cameras] Feed iframe failed to load:', url);
             iframeContainer.classList.add('hidden');

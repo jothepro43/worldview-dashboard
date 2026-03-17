@@ -1,0 +1,219 @@
+about:blank:1 An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.
+app.js:60 ========================================
+app.js:61   WorldView - Geospatial Intelligence
+app.js:62   Phase 1 Initializing...
+app.js:63 ========================================
+app.js:64 [App] Boot started at 2026-03-17T03:42:27.448Z
+app.js:67 [Config] API Key Status:
+app.js:83   ✗ Cesium Ion
+app.js:83   ✗ Google Maps
+app.js:83   ✗ OpenSky (Client ID)
+app.js:83   ✗ OpenSky (Client Secret)
+app.js:83   ✓ ADSB.fi
+app.js:83   ✗ ADS-B Exchange
+app.js:83   ✗ Windy Webcams
+app.js:83   ✗ ACLED
+app.js:83   ✗ ACLED Email
+app.js:91 [App] CesiumJS loaded: 1.124
+app.js:96 [App] satellite.js loaded.
+app.js:107 [App] Step 1/6: Initializing globe...
+globe.js:16 [Globe] Initializing CesiumJS viewer...
+globe.js:17 [Globe] Cesium version: 1.124
+globe.js:24 [Globe] WARNING: No Cesium Ion token set! Some features will not work.
+init @ globe.js:24
+boot @ app.js:109
+globe.js:25 [Globe] Get a free token at: https://cesium.com/ion/tokens
+init @ globe.js:25
+boot @ app.js:109
+globe.js:33 [Globe] WARNING: No Google Maps API key set! 3D Tiles will not load.
+init @ globe.js:33
+boot @ app.js:109
+globe.js:34 [Globe] Get a key at: https://developers.google.com/maps/documentation/tile
+init @ globe.js:34
+boot @ app.js:109
+globe.js:39 [Globe] Creating Cesium Viewer...
+globe.js:65 [Globe] Viewer created successfully.
+globe.js:80 [Globe] No imagery layers to remove (globe:false mode).
+globe.js:85 [Globe] Attempting to load Google Photorealistic 3D Tiles...
+Cesium.js:94 Only the Google geocoder can be used with Google Photorealistic 3D Tiles.  Set the `geocode` property of Viewer constructor options.  You can set additionalOptions.onlyUsingWithGoogleGeocoder to hide this warning once you have configured the geocoder.
+iR @ Cesium.js:94
+cCt @ Cesium.js:15969
+init @ globe.js:86
+boot @ app.js:109
+Cesium.js:80  GET https://api.cesium.com/v1/assets/2275207/endpoint?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI0ZDdmNWJiNy0wMmNlLTQ1MWUtODM2YS02NGM1MTBlOGMwMWQiLCJpZCI6MjU5LCJpYXQiOjE3MzMxNTc4OTV9.B3URHf0VdHDtGckb-hv7uqATdn8KfvkiuoAFZUq8tAo 401 (Unauthorized)
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+Oq @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:10387
+lCt @ Cesium.js:15969
+cCt @ Cesium.js:15969
+init @ globe.js:86
+boot @ app.js:109
+globe.js:93 [Globe] Could not load Google 3D Tiles: Uq {statusCode: 401, response: '{"code":"INVALID_TOKEN","message":"Invalid access token"}', responseHeaders: {…}}
+init @ globe.js:93
+await in init
+boot @ app.js:109
+globe.js:94 [Globe] Falling back to standard Cesium globe with imagery...
+globe.js:104 [Globe] Fallback globe created.
+Cesium.js:80  GET https://api.cesium.com/v1/assets/3845/endpoint?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI0ZDdmNWJiNy0wMmNlLTQ1MWUtODM2YS02NGM1MTBlOGMwMWQiLCJpZCI6MjU5LCJpYXQiOjE3MzMxNTc4OTV9.B3URHf0VdHDtGckb-hv7uqATdn8KfvkiuoAFZUq8tAo 401 (Unauthorized)
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+Oq @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:80
+(anonymous) @ Cesium.js:12535
+init @ globe.js:108
+await in init
+boot @ app.js:109
+globe.js:112 [Globe] Cesium Ion imagery failed, trying OSM... undefined
+init @ globe.js:112
+await in init
+boot @ app.js:109
+globe.js:126 [Globe] CartoDB dark imagery (English labels) loaded as fallback.
+globe.js:157 [Globe] Setting initial camera position...
+globe.js:180 [Globe] Globe depth testing ENABLED, fog disabled.
+globe.js:212 [Globe] Camera constraints set: min 200m, max 35,000km altitude.
+globe.js:249 [Globe] Post-render camera guard active.
+globe.js:191 [Globe] ✓ Viewer initialization complete.
+globe.js:192 [Globe] Has globe/tileset: true
+globe.js:193 [Globe] Scene primitives count: 0
+app.js:114 [App] Globe initialized in 335ms
+app.js:117 [App] Step 2/6: Loading shaders...
+shaders.js:152 [Shaders] Initializing post-processing stages...
+shaders.js:153 [Shaders] PostProcessStages available: true
+shaders.js:190 [Shaders] All post-processing stages created.
+app.js:121 [App] Shaders initialized.
+app.js:127 [App] Step 3/6: Setting up HUD...
+hud.js:32 [HUD] Initializing HUD controls...
+hud.js:42 [HUD] HUD initialized.
+app.js:161 [App] HUD initialized and callbacks wired.
+app.js:164 [App] Step 4/6: Starting data layers...
+flights.js:835 [Flights] Initializing aircraft tracking (waterfall + interpolation)...
+flights.js:836 [Flights] Scene primitives available: true
+flights.js:840 [Flights] OpenSky auth: NO (anonymous)
+flights.js:841 [Flights] ADSB.fi: ENABLED (proxied)
+flights.js:842 [Flights] ADS-B Exchange: NOT CONFIGURED
+flights.js:290 [Flights] OpenSky request: /api/opensky
+flights.js:814 [Flights] Poll interval set to 30s
+flights.js:855 [Flights] Aircraft tracking started (adaptive polling + continuous interpolation).
+app.js:169 [App] ✓ Flights layer initialized.
+satellites.js:189 [Satellites] Initializing satellite tracking...
+satellites.js:190 [Satellites] satellite.js available: true
+satellites.js:220 [Satellites] Fetching TLE: station from /api/tle/stations...
+satellites.js:209 [Satellites] Satellite tracking initialized.
+app.js:177 [App] ✓ Satellites layer initialized.
+earthquakes.js:19 [Earthquakes] Initializing earthquake tracking...
+earthquakes.js:32 [Earthquakes] Fetching earthquake data...
+earthquakes.js:25 [Earthquakes] Earthquake tracking started (5 min refresh).
+app.js:185 [App] ✓ Earthquakes layer initialized.
+weather.js:55 [Weather] Initializing weather event tracking...
+weather.js:73 [Weather] Fetching EONET events...
+weather.js:166 [Weather] Fetching NWS alerts...
+weather.js:65 [Weather] Weather tracking started (5 min refresh).
+app.js:193 [App] ✓ Weather layer initialized.
+cameras.js:65 [Cameras] Initializing camera layer...
+cameras.js:71 [Cameras] Camera layer initialized (viewport-based loading).
+cameras.js:72 [Cameras] Windy Webcams: NOT CONFIGURED
+app.js:201 [App] ✓ Cameras layer initialized.
+app.js:231 ========================================
+app.js:232   WorldView initialized in 0.35s
+app.js:233   All systems online.
+app.js:234 ========================================
+app.js:238 
+[CONFIG] Cesium Ion token not set!
+boot @ app.js:238
+app.js:242   1. Create free account: https://cesium.com/ion/signup
+boot @ app.js:242
+app.js:243   2. Copy token from: https://cesium.com/ion/tokens
+boot @ app.js:243
+app.js:244   3. Paste in js/app.js → CONFIG.cesiumIonToken
+
+boot @ app.js:244
+app.js:248 
+[CONFIG] Google Maps API key not set!
+boot @ app.js:248
+app.js:252   1. Go to: https://console.cloud.google.com
+boot @ app.js:252
+app.js:253   2. Enable "Map Tiles API"
+boot @ app.js:253
+app.js:254   3. Create API key under Credentials
+boot @ app.js:254
+app.js:255   4. Paste in js/app.js → CONFIG.googleMapsApiKey
+
+boot @ app.js:255
+app.js:259 
+[CONFIG] OpenSky OAuth2 credentials not set!
+boot @ app.js:259
+app.js:263   1. Register at: https://opensky-network.org/login
+boot @ app.js:263
+app.js:264   2. Get OAuth2 client credentials
+boot @ app.js:264
+app.js:265   3. Set OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET env vars on the server
+boot @ app.js:265
+app.js:266   4. Or paste in js/app.js → CONFIG.openskyClientId / openskyClientSecret
+
+boot @ app.js:266
+earthquakes.js:36 [Earthquakes] Proxy response: 200
+earthquakes.js:57 [Earthquakes] Loaded 276 earthquakes.
+satellites.js:229 [Satellites] Proxy response for station: 200
+flights.js:293  GET http://localhost:3000/api/opensky 429 (Too Many Requests)
+fetchFromOpenSky @ flights.js:293
+fetchAircraft @ flights.js:435
+startAdaptivePolling @ flights.js:818
+init @ flights.js:852
+boot @ app.js:168
+flights.js:302 [Flights] OpenSky 429 — rate limited
+fetchFromOpenSky @ flights.js:302
+await in fetchFromOpenSky
+fetchAircraft @ flights.js:435
+startAdaptivePolling @ flights.js:818
+init @ flights.js:852
+boot @ app.js:168
+flights.js:215 [Flights] Backoff: server says retry in 501s
+applyBackoff @ flights.js:215
+fetchFromOpenSky @ flights.js:304
+await in fetchFromOpenSky
+fetchAircraft @ flights.js:435
+startAdaptivePolling @ flights.js:818
+init @ flights.js:852
+boot @ app.js:168
+flights.js:448 [Flights] OpenSky failed, trying fallbacks...
+flights.js:222 [Flights] Backoff: waiting 10s (failure #1)
+applyBackoff @ flights.js:222
+fetchAircraft @ flights.js:449
+await in fetchAircraft
+startAdaptivePolling @ flights.js:818
+init @ flights.js:852
+boot @ app.js:168
+flights.js:343 [Flights] ADSB.fi request (proxied): /api/adsbfi?lat=20.0000&lon=-40.0000&radius=250
+satellites.js:248 [Satellites] station raw data length: 5208 chars (proxy)
+satellites.js:268 [Satellites] Loaded 31 from station (31 total available).
+satellites.js:220 [Satellites] Fetching TLE: gps from /api/tle/gps-ops...
+weather.js:77 [Weather] EONET proxy response status: 200
+weather.js:98 [Weather] Loaded 6224 EONET events.
+satellites.js:229 [Satellites] Proxy response for gps: 200
+weather.js:173 [Weather] NWS proxy response status: 200
+satellites.js:248 [Satellites] gps raw data length: 5376 chars (proxy)
+satellites.js:268 [Satellites] Loaded 32 from gps (32 total available).
+satellites.js:220 [Satellites] Fetching TLE: starlink from /api/tle/starlink...
+flights.js:352 [Flights] ADSB.fi returned no aircraft
+fetchFromADSBfi @ flights.js:352
+flights.js:366 [Flights] ADS-B Exchange API key not configured
+flights.js:456 [Flights] All sources failed. Interpolating existing data.
+fetchAircraft @ flights.js:456
+flights.js:141 [Flights] Source: Interpolating
+weather.js:202 [Weather] Loaded 200 NWS alerts.
+satellites.js:229 [Satellites] Proxy response for starlink: 200
+satellites.js:248 [Satellites] starlink raw data length: 1652952 chars (proxy)
+satellites.js:268 [Satellites] Loaded 500 from starlink (9839 total available).
+satellites.js:220 [Satellites] Fetching TLE: active from /api/tle/active...
+satellites.js:229 [Satellites] Proxy response for active: 200
+satellites.js:248 [Satellites] active raw data length: 2472960 chars (proxy)
+satellites.js:268 [Satellites] Loaded 2000 from active (14720 total available).
+satellites.js:275 [Satellites] Total satellites loaded: 2563

@@ -310,10 +310,13 @@ const WorldViewFlights = (() => {
                 return null;
             }
             const data = await response.json();
-            if (!data || !data.states || data.states.length === 0) {
-                console.warn('[Flights] OpenSky returned no states');
+            if (!data) {
+                console.warn('[Flights] OpenSky returned no data object');
                 return null;
             }
+            // Handle case where API succeeds but returns no aircraft (empty array)
+            const states = data.states || [];
+            
             const authLabel = data._authMode === 'OAuth2' ? 'OpenSky (OAuth2)' : 'OpenSky (Anon)';
 
             // Track credit cost (FIX 2)
@@ -322,8 +325,9 @@ const WorldViewFlights = (() => {
             dailyCreditsUsed += lastCreditCost;
             updateCreditDisplay();
 
-            console.log(`[Flights] ${authLabel}: ${data.states.length} aircraft`);
-            return { states: data.states, source: authLabel };
+            console.log(`[Flights] ${authLabel}: ${states.length} aircraft`);
+            // Return empty array instead of null to signal "success, just 0 planes"
+            return { states: states, source: authLabel };
         } catch (err) {
             console.error('[Flights] OpenSky error:', err.message);
             return null;

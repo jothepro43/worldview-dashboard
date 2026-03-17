@@ -8,32 +8,16 @@
 
     // =============================================
     // MASTER CONFIGURATION — All API Keys
-    // Replace each YOUR_* placeholder with your key.
-    // Any key left as a placeholder will be skipped
-    // gracefully — the feature simply won't load.
     // =============================================
     const CONFIG = {
-        // Cesium Ion — https://cesium.com/ion/tokens
+        // These will be loaded asynchronously from server
         cesiumIonToken: 'YOUR_CESIUM_ION_TOKEN',
-
-        // Google Maps (Map Tiles API) — https://console.cloud.google.com
         googleMapsApiKey: 'YOUR_GOOGLE_MAPS_API_KEY',
-
-        // OpenSky Network (OAuth2 Client Credentials for higher rate limits)
-        // https://opensky-network.org/ — register at opensky-network.org/login
         openskyClientId: 'YOUR_OPENSKY_CLIENT_ID',
         openskyClientSecret: 'YOUR_OPENSKY_CLIENT_SECRET',
-
-        // ADSB.fi — free, no auth required. Set false to disable.
         adsbfiEnabled: true,
-
-        // ADS-B Exchange (RapidAPI) — https://rapidapi.com/adsbx/api/adsbx-flight-sim-traffic
         adsbExchangeApiKey: 'YOUR_ADSBEXCHANGE_API_KEY',
-
-        // Windy Webcams API — https://api.windy.com/
         windyWebcamApiKey: 'YOUR_WINDY_WEBCAM_API_KEY',
-
-        // ACLED (Armed Conflict) — https://acleddata.com/
         acledApiKey: 'YOUR_ACLED_API_KEY',
         acledEmail: 'YOUR_ACLED_EMAIL'
     };
@@ -43,6 +27,33 @@
     // =============================================
 
     let viewer = null;
+
+    /**
+     * Helper: Load config from server environment variables
+     */
+    async function loadConfigFromServer() {
+        try {
+            console.log('[App] Loading configuration from server...');
+            const response = await fetch('/api/config');
+            if (response.ok) {
+                const envConfig = await response.json();
+                
+                // Merge server config into client config
+                if (envConfig.cesiumIonToken) CONFIG.cesiumIonToken = envConfig.cesiumIonToken;
+                if (envConfig.googleMapsApiKey) CONFIG.googleMapsApiKey = envConfig.googleMapsApiKey;
+                // Note: secrets like openskyClientSecret stay on server
+                if (envConfig.adsbfiEnabled !== undefined) CONFIG.adsbfiEnabled = envConfig.adsbfiEnabled;
+                
+                // These might be used directly or just indicate configuration exists
+                if (envConfig.openskyClientId === 'configured') CONFIG.openskyClientId = 'configured_on_server';
+                if (envConfig.openskyClientSecret === 'configured') CONFIG.openskyClientSecret = 'configured_on_server';
+                
+                console.log('[App] Configuration loaded from server environment.');
+            }
+        } catch (err) {
+            console.warn('[App] Failed to load config from server, using local defaults:', err);
+        }
+    }
 
     /**
      * Helper: returns true if a config value is set (not a YOUR_* placeholder).
@@ -62,6 +73,9 @@
         console.log('%c  Phase 1 Initializing...', 'color: #00ff88');
         console.log('%c========================================', 'color: #00f0ff');
         console.log('[App] Boot started at', new Date().toISOString());
+
+        // Load env config first
+        await loadConfigFromServer();
 
         // ── Config diagnostics ──────────────────────────────────────────────
         console.log('%c[Config] API Key Status:', 'color: #ffaa00; font-weight: bold');
@@ -283,6 +297,7 @@
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', boot);
     } else {
-        boot();
+        // Give browser a moment to settle
+        setTimeout(boot, 100);
     }
 })();
